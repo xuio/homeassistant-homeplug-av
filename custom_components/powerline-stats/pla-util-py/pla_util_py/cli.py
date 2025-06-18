@@ -204,36 +204,16 @@ def _fmt_capabilities(pkt: Any):
     _row("Implementation Version:", str(impl_ver))
 
 
-def _fmt_network_stats(pkt: Any):
-    from scapy.packet import Raw  # type: ignore
+def _fmt_network_stats(pkts: Any):
+    from pla_util_py.parsers import parse_network_stats  # lazy import
 
-    payload: bytes = bytes(pkt[Raw].load)
-
-    if len(payload) < 11:
-        print("Payload too short – cannot parse network stats.")
-        return
-
-    reported_stations = payload[9]
-    print(f"Number of stations (reported): {reported_stations}")
-
-    # The reply may be split across multiple confirmations; we can only parse
-    # the entries present in *this* frame.
-    available = (len(payload) - 10) // 10
-    if available != reported_stations:
-        print(f"Entries in this frame: {available} (partial)")
-
-    offset = 10
-    for idx in range(1, available + 1):
-        mac = _mac_bytes_to_str(payload[offset : offset + 6])
-        to_rate = payload[offset + 6] | ((payload[offset + 7] & 0x07) << 8)
-        from_rate = payload[offset + 8] | ((payload[offset + 9] & 0x07) << 8)
-        
+    stats = parse_network_stats(pkts)
+    print(f"Number of stations: {len(stats)}")
+    for idx, s in enumerate(stats, 1):
         print(f"Station {idx}:")
-        print(f"  Destination Address (DA): {mac}")
-        print(f"  Avg PHY Data Rate to DA:   {to_rate:3d} Mbps")
-        print(f"  Avg PHY Data Rate from DA: {from_rate:3d} Mbps")
-
-        offset += 10
+        print(f"  Destination Address (DA): {s['mac']}")
+        print(f"  Avg PHY Data Rate to DA:   {s['to_rate']:3d} Mbps")
+        print(f"  Avg PHY Data Rate from DA: {s['from_rate']:3d} Mbps")
 
 
 def _fmt_discover_list(pkt: Any):

@@ -44,11 +44,12 @@ def parse_discover(pkts: List[Any]) -> List[Dict[str, str]]:
         seen.add(mac)
 
         payload = bytes(pkt[Raw].load)
-        if len(payload) < 12:
+        # Confirm this is a discover confirmation: first two bytes 0x02 0x71
+        if len(payload) < 12 or payload[0] != 0x02 or payload[1] != 0x71:
             continue
         iface_code = payload[9]
-        hfid_len = payload[10]
-        hfid = payload[11 : 11 + hfid_len].decode("ascii", errors="replace").rstrip("\x00")
+        # HFID starts at byte 11 (offset 12 in Ada, which is 11 here) and runs to end
+        hfid = payload[11:].decode("ascii", errors="replace").rstrip("\x00")
 
         adapters.append({
             "mac": mac,
@@ -88,19 +89,23 @@ def parse_id_info(pkt: Any) -> Dict[str, str]:
     return {"hpav_version": ver, "mcs": mcs}
 
 
-def parse_network_stats(pkt: Any) -> List[Dict[str, int]]:
-    payload = bytes(pkt[Raw].load)
-    available = (len(payload) - 10) // 10
-    stats = []
-    offset = 10
-    for _ in range(available):
-        stats.append({
-            "mac": _mac_bytes_to_str(payload[offset : offset + 6]),
-            "to_rate": payload[offset + 6] | ((payload[offset + 7] & 0x07) << 8),
-            "from_rate": payload[offset + 8] | ((payload[offset + 9] & 0x07) << 8),
-        })
-        offset += 10
-    return stats
+def parse_network_stats(pkts: list[Any] | Any) -> List[Dict[str, int]]:
+    if not isinstance(pkts, list):
+        pkts = [pkts]
+
+    combined: Dict[str, Dict[str, int]] = {}
+
+    for pkt in pkts:
+        payload = bytes(pkt[Raw].load)
+        offset = 10
+        while offset + 10 <= len(payload):
+            mac = _mac_bytes_to_str(payload[offset : offset + 6])
+            to_rate = payload[offset + 6] | ((payload[offset + 7] & 0x07) << 8)
+            from_rate = payload[offset + 8] | ((payload[offset + 9] & 0x07) << 8)
+            combined[mac] = {"mac": mac, "to_rate": to_rate, "from_rate": from_rate}
+            offset += 10
+
+    return list(combined.values())
 
 
 def parse_discover_list(pkt: Any) -> Dict[str, Any]:

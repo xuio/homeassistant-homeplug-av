@@ -7,7 +7,7 @@ packet (or ``None``).  Proper parsing of the replies would require quite a bit
 of additional work and is left for future iterations.
 """
 
-from typing import Optional
+from typing import Optional, Any
 import logging
 
 from .messages import PAYLOADS
@@ -53,7 +53,24 @@ def get_capabilities(interface: Optional[str] = None, pla_mac: Optional[str] = N
 
 
 def get_network_stats(interface: Optional[str] = None, pla_mac: Optional[str] = None, *, timeout: float = DEFAULT_TIMEOUT):
-    return _run("get_network_stats", interface, pla_mac, timeout)
+    dest = pla_mac or BROADCAST_MAC
+    payload = PAYLOADS["get_network_stats"]
+    pkts = list(
+        send_message_collect(payload, interface=interface, dest_mac=dest, timeout=timeout, window=timeout)
+    )
+    # Keep only packets whose payload matches the expected confirmation header 0x02 0x2D
+    filtered: list[Any] = []
+    for p in pkts:
+        try:
+            raw = bytes(p.load)
+        except AttributeError:
+            from scapy.packet import Raw  # type: ignore
+
+            raw = bytes(p[Raw].load)
+        if len(raw) >= 2 and raw[0] == 0x02 and raw[1] == 0x2D:
+            filtered.append(p)
+
+    return filtered
 
 
 def reset(interface: Optional[str] = None, pla_mac: Optional[str] = None, *, timeout: float = DEFAULT_TIMEOUT):
