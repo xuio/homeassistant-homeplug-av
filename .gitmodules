@@ -1,0 +1,3 @@
+[submodule "custom_components/powerline-stats/pla-util-py"]
+	path = custom_components/powerline-stats/pla-util-py
+	url = https://github.com/xuio/pla-util-py
