@@ -134,6 +134,11 @@ class PowerlineStaticSensor(CoordinatorEntity, SensorEntity):
             "model": "Powerline Adapter",
         }
 
+    @property
+    def available(self) -> bool:
+        """Static metadata is always available."""
+        return True
+
 
 class PowerlineRateSensor(CoordinatorEntity, SensorEntity):
     """Representation of a powerline data rate sensor."""
