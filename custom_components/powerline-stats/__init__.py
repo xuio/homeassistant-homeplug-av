@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import asyncio
 
 # Ensure bundled pla_util_py library is importable
 _LIB_PATH = Path(__file__).parent / "pla-util-py"
@@ -15,8 +16,9 @@ from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.event import async_track_time_interval
 
-from .const import DOMAIN, PLATFORMS, DEFAULT_SCAN_INTERVAL, DEFAULT_API_TIMEOUT
+from .const import DOMAIN, PLATFORMS, DEFAULT_SCAN_INTERVAL
 from .coordinator import PowerlineDataUpdateCoordinator
 from pla_util_py import PLAUtil
 
@@ -35,9 +37,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     scan_interval: int = entry.options.get(
         "scan_interval", entry.data.get("scan_interval", DEFAULT_SCAN_INTERVAL)
     )
-    timeout: float = entry.data.get("timeout", DEFAULT_API_TIMEOUT)
 
     pla = PLAUtil(interface=interface)
+
+    # Shared lock to prevent concurrent network access
+    network_lock = asyncio.Lock()
 
     # Discovery of adapters may block, so run in executor.
     adapters = await hass.async_add_executor_job(pla.discover)
@@ -48,18 +52,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER,
         pla=pla,
         update_interval=timedelta(seconds=scan_interval),
-        timeout=timeout,
+        lock=network_lock,
+    )
+
+    # Set holding MAC addresses seen by the last discover poll
+    online_macs: set[str] = set(a["mac"].lower() for a in adapters)
+
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+        "coordinator": coordinator,
+        "adapters": adapters,
+        "online_macs": online_macs,
+        "lock": network_lock,
+    }
+
+    async def _poll_discover(now):
+        """Periodically refresh adapter presence using discover."""
+        async with network_lock:
+            result = await hass.async_add_executor_job(pla.discover)
+
+        if result is None:
+            return
+
+        new_set = {a["mac"].lower() for a in result}
+        online_macs.clear()
+        online_macs.update(new_set)
+
+    # Poll discover every scan_interval seconds but offset by half interval to
+    # avoid clashing with stats polling schedule.
+    async_track_time_interval(
+        hass,
+        _poll_discover,
+        timedelta(seconds=scan_interval),
     )
 
     await coordinator.async_config_entry_first_refresh()
-
-    if DOMAIN not in hass.data:
-        hass.data[DOMAIN] = {}
-
-    hass.data[DOMAIN][entry.entry_id] = {
-        "coordinator": coordinator,
-        "adapters": adapters,
-    }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

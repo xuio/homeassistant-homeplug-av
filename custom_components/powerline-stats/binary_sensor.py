@@ -22,13 +22,16 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
     entities: list[BinarySensorEntity] = []
 
-    # Build set of known MAC addresses (same logic as sensor.py)
-    macs = set(coordinator.data.keys())
-    for adapter in data.get("adapters", []):
-        macs.add(adapter["mac"].lower())
+    adapters = data.get("adapters", [])
+
+    online_macs: set[str] = data.get("online_macs", set())
+
+    # Build set of MAC addresses we know about (coordinator + discovered)
+    macs: set[str] = set(coordinator.data.keys())
+    macs.update(a["mac"].lower() for a in adapters)
 
     for mac in macs:
-        entities.append(PowerlineOnlineSensor(coordinator, mac=mac))
+        entities.append(PowerlineOnlineSensor(coordinator, online_macs, mac=mac))
 
     async_add_entities(entities)
 
@@ -39,37 +42,25 @@ class PowerlineOnlineSensor(CoordinatorEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_icon = "mdi:lan"
 
-    def __init__(self, coordinator, *, mac: str) -> None:
+    def __init__(self, coordinator, online_macs: set[str], *, mac: str) -> None:
         super().__init__(coordinator)
         self._mac = mac
         self._attr_name = f"{mac} Online"
         self._attr_unique_id = f"{mac}-online"
-        # Determine initial state based on current coordinator data (first
-        # refresh happened before entity creation).
-        data = coordinator.data.get(mac)
-        if data:
-            to_rate = data.get("to_rate", 0)
-            from_rate = data.get("from_rate", 0)
-            self._last_state = not (to_rate == 0 and from_rate == 0)
-        else:
-            self._last_state = None
+        self._online_macs = online_macs
+        # Determine initial state based on discover data
+        self._last_state = mac.lower() in online_macs
 
     @property
     def is_on(self) -> bool | None:  # type: ignore[override]
-        data = self.coordinator.data.get(self._mac)
-
-        if data:
-            to_rate = data.get("to_rate", 0)
-            from_rate = data.get("from_rate", 0)
-            self._last_state = not (to_rate == 0 and from_rate == 0)
-
-        # If we didn't get an update (`data` is None), keep previous state
+        # Connected when MAC present in latest discover list
+        self._last_state = self._mac in self._online_macs
         return self._last_state
 
     @property
     def available(self) -> bool:
         """Binary sensor is always available once first state determined."""
-        return self._last_state is not None
+        return True
 
     @property
     def device_info(self):

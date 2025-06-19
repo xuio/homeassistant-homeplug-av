@@ -90,7 +90,6 @@ class PowerlineStatsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional("scan_interval", default=30): vol.All(
                     int, vol.Range(min=5)
                 ),
-                vol.Optional("timeout", default=1.0): vol.All(float, vol.Range(min=0.1, max=5.0)),
             }
         )
 
@@ -133,10 +132,6 @@ class PowerlineStatsOptionsFlowHandler(config_entries.OptionsFlow):
                     "scan_interval",
                     default=self.config_entry.data.get("scan_interval", 30),
                 ): vol.All(int, vol.Range(min=5)),
-                vol.Optional(
-                    "timeout",
-                    default=self.config_entry.data.get("timeout", 1.0),
-                ): vol.All(float, vol.Range(min=0.1, max=5.0)),
             }
         )
 

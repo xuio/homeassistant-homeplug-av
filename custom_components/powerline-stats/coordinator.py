@@ -9,7 +9,6 @@ from datetime import timedelta
 from typing import Dict, Any
 import sys
 from pathlib import Path
-import inspect
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import (
@@ -36,11 +35,11 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         logger: logging.Logger,
         pla: PLAUtil,
         update_interval: timedelta,
-        timeout: float,
+        lock: asyncio.Lock,
     ) -> None:
         """Initialize."""
         self.pla = pla
-        self._timeout = timeout
+        self._lock = lock
 
         super().__init__(
             hass,
@@ -50,21 +49,8 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         )
 
     def _stats_call(self):
-        """Return network stats using timeout if the PLAUtil version supports it."""
-
-        try:
-            sig = inspect.signature(self.pla.network_stats)  # type: ignore[attr-defined]
-            if "timeout" in sig.parameters:
-                return self.pla.network_stats(timeout=self._timeout)
-        except (ValueError, TypeError):
-            # Signature not introspectable – fall back to try/except below
-            pass
-
-        # Fallback: attempt with timeout then without to support older versions
-        try:
-            return self.pla.network_stats(timeout=self._timeout)
-        except TypeError:
-            return self.pla.network_stats()
+        """Return network stats (serialized by lock)."""
+        return self.pla.network_stats()
 
     async def _async_update_data(self) -> Dict[str, Any]:
         """Fetch data from the powerline network."""
@@ -74,12 +60,12 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             # short delay so the request frames do not collide.
 
             stats_list = None
-            for attempt in range(3):
-                stats_list = await self.hass.async_add_executor_job(self._stats_call)
-                if stats_list:
-                    break
-                # back-off before retrying
-                await asyncio.sleep(0.2 * (attempt + 1))
+            async with self._lock:
+                for attempt in range(3):
+                    stats_list = await self.hass.async_add_executor_job(self._stats_call)
+                    if stats_list:
+                        break
+                    await asyncio.sleep(0.2 * (attempt + 1))
 
             # _LOGGER.warning(f"stats_list: {stats_list}")
 

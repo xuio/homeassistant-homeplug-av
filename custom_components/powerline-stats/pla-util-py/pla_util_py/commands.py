@@ -55,22 +55,14 @@ def get_capabilities(interface: Optional[str] = None, pla_mac: Optional[str] = N
 def get_network_stats(interface: Optional[str] = None, pla_mac: Optional[str] = None, *, timeout: float = DEFAULT_TIMEOUT):
     dest = pla_mac or BROADCAST_MAC
     payload = PAYLOADS["get_network_stats"]
-    pkts = list(
-        send_message_collect(payload, interface=interface, dest_mac=dest, timeout=timeout, window=timeout)
-    )
-    # Keep only packets whose payload matches the expected confirmation header 0x02 0x2D
-    filtered: list[Any] = []
-    for p in pkts:
-        try:
-            raw = bytes(p.load)
-        except AttributeError:
-            from scapy.packet import Raw  # type: ignore
+    p = send_message(payload, interface=interface, dest_mac=dest, timeout=timeout)
+    if p is None:
+        _LOG.debug("No reply packet – returning empty list")
+        return []
 
-            raw = bytes(p[Raw].load)
-        if len(raw) >= 2 and raw[0] == 0x02 and raw[1] == 0x2D:
-            filtered.append(p)
+    _LOG.debug(f"p: {p}")
 
-    return filtered
+    return p
 
 
 def reset(interface: Optional[str] = None, pla_mac: Optional[str] = None, *, timeout: float = DEFAULT_TIMEOUT):
