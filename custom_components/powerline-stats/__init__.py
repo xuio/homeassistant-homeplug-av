@@ -51,6 +51,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass,
         _LOGGER,
         pla=pla,
+        interface=interface,
         update_interval=timedelta(seconds=scan_interval),
         lock=network_lock,
     )
@@ -67,13 +68,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def _poll_discover(now):
         """Periodically refresh adapter presence using discover."""
+        # First discover pass
         async with network_lock:
-            result = await hass.async_add_executor_job(pla.discover)
+            def _disc():
+                try:
+                    return pla.discover(timeout=2.0)  # type: ignore[arg-type]
+                except TypeError:
+                    return pla.discover()
 
-        if result is None:
+            result1 = await hass.async_add_executor_job(_disc)
+
+        if result1 is None:
             return
 
-        new_set = {a["mac"].lower() for a in result}
+        new_set = {a["mac"].lower() for a in result1}
+
+        # Determine MACs that would be considered lost
+        maybe_lost = online_macs - new_set
+
+        if maybe_lost:
+            # Immediate second check to confirm loss
+            async with network_lock:
+                def _disc():
+                    try:
+                        return pla.discover(timeout=2.0)  # type: ignore[arg-type]
+                    except TypeError:
+                        return pla.discover()
+
+                result2 = await hass.async_add_executor_job(_disc)
+
+            if result2:
+                new_set_second = {a["mac"].lower() for a in result2}
+                new_set.update(new_set_second)
+
+        # Update the shared set atomically
         online_macs.clear()
         online_macs.update(new_set)
 

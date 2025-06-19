@@ -16,6 +16,8 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
+from .const import DOMAIN
+
 _LOGGER = logging.getLogger(__name__)
 
 # Ensure bundled library importable when executed standalone
@@ -34,12 +36,16 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         hass: HomeAssistant,
         logger: logging.Logger,
         pla: PLAUtil,
+        interface: str,
         update_interval: timedelta,
         lock: asyncio.Lock,
     ) -> None:
         """Initialize."""
         self.pla = pla
+        self._interface = interface
         self._lock = lock
+        self._known_macs: set[str] = set()
+        self.mesh_data: Dict[str, Dict[str, Any]] = {}
 
         super().__init__(
             hass,
@@ -48,55 +54,93 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             update_interval=update_interval,
         )
 
-    def _stats_call(self):
-        """Return network stats (serialized by lock)."""
-        return self.pla.network_stats()
+    def _stats_call(self, mac: str | None = None):
+        """Return network stats with 2-second timeout when supported."""
+        # Create a new PLAUtil instance for targeted polling
+        if mac:
+            pla_targeted = PLAUtil(interface=self._interface, pla_mac=mac)
+        else:
+            pla_targeted = self.pla
+            
+        try:
+            return pla_targeted.network_stats(timeout=2.0)  # type: ignore[arg-type]
+        except TypeError:
+            # Older version without timeout param
+            return pla_targeted.network_stats()
 
     async def _async_update_data(self) -> Dict[str, Any]:
         """Fetch data from the powerline network."""
         try:
-            # Try up to 3 attempts as occasional packet loss can cause missed
-            # replies even though the CLI always succeeds.  Each retry waits a
-            # short delay so the request frames do not collide.
+            # If we have previous data, include those MACs too
+            if self.data:
+                for key in self.data.keys():
+                    if not key.startswith("_"):  # Skip special keys
+                        self._known_macs.add(key)
 
-            stats_list = None
-            async with self._lock:
-                for attempt in range(3):
-                    stats_list = await self.hass.async_add_executor_job(self._stats_call)
-                    if stats_list:
-                        break
-                    await asyncio.sleep(0.2 * (attempt + 1))
+            # Also get MACs from the initial discovery
+            entry_data = self.hass.data.get(DOMAIN, {})
+            for entry_id, data in entry_data.items():
+                if "adapters" in data:
+                    for adapter in data["adapters"]:
+                        self._known_macs.add(adapter["mac"].lower())
 
-            # _LOGGER.warning(f"stats_list: {stats_list}")
+            # Now poll each adapter individually to get their view of the network
+            # This gives us the full mesh of connections
+            mesh_data: Dict[str, Dict[str, Any]] = {}
+            
+            async def poll_single_adapter(mac: str) -> tuple[str, list | None]:
+                """Poll a single adapter for its network stats."""
+                async with self._lock:
+                    stats = await self.hass.async_add_executor_job(
+                        lambda: self._stats_call(mac)
+                    )
+                return mac, stats
 
-            # If the library returned None or anything other than an iterable of
-            # dicts, treat it as no data instead of crashing.
-            if not stats_list:
-                return self.data or {}
-
-            # Ensure we only process well-formed dicts containing a MAC key.
-            valid_stats = [
-                stat
-                for stat in stats_list
-                if isinstance(stat, dict) and stat.get("mac")
-            ]
+            # Poll all adapters in parallel (but serialized by the lock)
+            tasks = [poll_single_adapter(mac) for mac in self._known_macs]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
             now = time.time()
 
-            # Build new dict starting from previous data so we keep entries that
-            # temporarily disappear (they may come back in the next poll).
-            new_data: Dict[str, Any] = {} if self.data is None else dict(self.data)
+            # Process results from each adapter
+            for result in results:
+                if isinstance(result, Exception):
+                    _LOGGER.warning(f"Failed to poll adapter: {result}")
+                    continue
+                    
+                source_mac, stats_list = result
+                
+                if not stats_list:
+                    _LOGGER.debug(f"No stats from adapter {source_mac}")
+                    continue
 
-            for stat in valid_stats:
-                mac_lc = stat["mac"].lower()
-                entry = new_data.get(mac_lc, {})
-                entry.update({
-                    "to_rate": stat.get("to_rate"),
-                    "from_rate": stat.get("from_rate"),
-                    "last_seen": now,
-                })
-                new_data[mac_lc] = entry
+                # Each adapter reports stats to all its peers
+                for stat in stats_list:
+                    if not isinstance(stat, dict) or not stat.get("mac"):
+                        continue
+                        
+                    peer_mac = stat["mac"].lower()
+                    
+                    # Create entry for this connection if needed
+                    key = f"{source_mac}_{peer_mac}"
+                    mesh_data[key] = {
+                        "source": source_mac,
+                        "target": peer_mac,
+                        "tx_rate": stat.get("to_rate", 0),  # Rate TO peer
+                        "rx_rate": stat.get("from_rate", 0),  # Rate FROM peer  
+                        "last_seen": now,
+                    }
 
-            return new_data
+            _LOGGER.info(f"Collected mesh data: {len(mesh_data)} connections from {len(self._known_macs)} adapters")
+
+            # Create minimal adapter entries for device tracking
+            adapter_data: Dict[str, Any] = {}
+            for mac in self._known_macs:
+                adapter_data[mac] = {"last_seen": now}
+
+            # Store mesh data as coordinator attribute
+            self.mesh_data = mesh_data
+
+            return adapter_data
         except Exception as err:
             raise UpdateFailed(err) from err

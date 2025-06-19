@@ -19,10 +19,9 @@ async def async_setup_entry(hass, entry, async_add_entities):
     """Set up binary sensors for a config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
+    adapters = data.get("adapters", [])
 
     entities: list[BinarySensorEntity] = []
-
-    adapters = data.get("adapters", [])
 
     online_macs: set[str] = data.get("online_macs", set())
 
@@ -30,8 +29,17 @@ async def async_setup_entry(hass, entry, async_add_entities):
     macs: set[str] = set(coordinator.data.keys())
     macs.update(a["mac"].lower() for a in adapters)
 
+    # Create adapter index mapping for consistent naming
+    adapter_index_map = {mac: idx + 1 for idx, mac in enumerate(sorted(macs))}
+
     for mac in macs:
-        entities.append(PowerlineOnlineSensor(coordinator, online_macs, mac=mac))
+        adapter_name = f"Adapter {adapter_index_map[mac]}"
+        entities.append(PowerlineOnlineSensor(
+            coordinator, 
+            online_macs, 
+            mac=mac,
+            adapter_name=adapter_name
+        ))
 
     async_add_entities(entities)
 
@@ -42,14 +50,20 @@ class PowerlineOnlineSensor(CoordinatorEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_icon = "mdi:lan"
 
-    def __init__(self, coordinator, online_macs: set[str], *, mac: str) -> None:
+    def __init__(self, coordinator, online_macs: set[str], *, mac: str, adapter_name: str) -> None:
         super().__init__(coordinator)
         self._mac = mac
-        self._attr_name = f"{mac} Online"
-        self._attr_unique_id = f"{mac}-online"
+        self._adapter_name = adapter_name
+        self._adapter_idx = int(adapter_name.split()[-1])  # Extract number from "Adapter N"
+        self._attr_unique_id = f"powerline_adapter_{self._adapter_idx}_online"
         self._online_macs = online_macs
         # Determine initial state based on discover data
         self._last_state = mac.lower() in online_macs
+
+    @property
+    def name(self):
+        """Return the name."""
+        return "Online"
 
     @property
     def is_on(self) -> bool | None:  # type: ignore[override]
@@ -66,7 +80,7 @@ class PowerlineOnlineSensor(CoordinatorEntity, BinarySensorEntity):
     def device_info(self):
         return {
             "identifiers": {(DOMAIN, self._mac)},
-            "name": self._mac,
-            "manufacturer": "Unknown",
+            "name": self._adapter_name,
             "model": "Powerline Adapter",
+            "manufacturer": "Unknown",
         } 
