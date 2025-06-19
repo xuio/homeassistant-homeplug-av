@@ -116,10 +116,16 @@ def parse_discover_list(pkt: Any) -> Dict[str, Any]:
     stations = []
     for _ in range(station_count):
         base = offset
+        role_byte = payload[base + 9]
         stations.append({
             "mac": _mac_bytes_to_str(payload[base : base + 6]),
             "tei": payload[base + 6],
             "same_network": payload[base + 7] != 0,
+            "snid": payload[base + 8] & 0x0F,
+            "cco": (role_byte & 0x20) != 0,
+            "pco": (role_byte & 0x40) != 0,
+            "bcco": (role_byte & 0x80) != 0,
+            "signal_level": payload[base + 10],
         })
         offset += octets_per_station
     return {"stations": stations}

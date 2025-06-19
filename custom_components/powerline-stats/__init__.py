@@ -59,11 +59,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Set holding MAC addresses seen by the last discover poll
     online_macs: set[str] = set(a["mac"].lower() for a in adapters)
 
+    # Dictionary to store discover-list data for each adapter
+    discover_list_data: dict[str, dict] = {}
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "coordinator": coordinator,
         "adapters": adapters,
         "online_macs": online_macs,
         "lock": network_lock,
+        "discover_list_data": discover_list_data,
     }
 
     async def _poll_discover(now):
@@ -104,6 +108,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Update the shared set atomically
         online_macs.clear()
         online_macs.update(new_set)
+
+        # Now poll discover-list for each online adapter to get detailed info
+        for mac in online_macs:
+            async with network_lock:
+                try:
+                    # Create targeted PLAUtil instance
+                    pla_targeted = PLAUtil(interface=interface, pla_mac=mac)
+                    
+                    def _disc_list():
+                        try:
+                            return pla_targeted.discover_list(timeout=2.0)  # type: ignore[arg-type]
+                        except TypeError:
+                            return pla_targeted.discover_list()
+                    
+                    disc_list_result = await hass.async_add_executor_job(_disc_list)
+                    
+                    if disc_list_result and "stations" in disc_list_result:
+                        # Store the discover-list data for this adapter
+                        discover_list_data[mac] = disc_list_result
+                        _LOGGER.debug(f"Got discover-list data for {mac}: {disc_list_result}")
+                        _LOGGER.debug(f"Got discover-list data for {mac}: {len(disc_list_result['stations'])} stations")
+                        
+                        # Fire event for ALL adapters since discover-list contains data about all
+                        for adapter_mac in online_macs:
+                            hass.bus.async_fire(
+                                f"{DOMAIN}_discover_list_updated",
+                                {"mac": adapter_mac}
+                            )
+                    
+                except Exception as e:
+                    _LOGGER.debug(f"Failed to get discover-list for {mac}: {e}")
 
     # Poll discover every scan_interval seconds but offset by half interval to
     # avoid clashing with stats polling schedule.

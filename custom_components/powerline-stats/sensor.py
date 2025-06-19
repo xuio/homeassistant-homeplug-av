@@ -24,6 +24,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
     adapters = data.get("adapters", [])
+    discover_list_data = data.get("discover_list_data", {})
 
     adapter_map = {a["mac"].lower(): a for a in adapters}
 
@@ -79,6 +80,99 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 value=hfid,
                 unique_id=f"powerline_adapter_{adapter_index_map[mac]}_hfid",
                 icon="mdi:identifier",
+            )
+        )
+
+        # Add discover-list based sensors if data is available
+        disc_data = discover_list_data.get(mac, {})
+        stations = disc_data.get("stations", [])
+        
+        _LOGGER.debug(f"Discover-list data for {mac}: {disc_data}")
+        
+        # Find this adapter's own info in the stations list
+        own_station = None
+        for station in stations:
+            if station.get("mac", "").lower() == mac:
+                own_station = station
+                _LOGGER.info(f"Found own station data for {mac}: {own_station}")
+                break
+        
+        # Always create these sensors, they'll show "Unknown" until data is available
+        # TEI
+        entities.append(
+            PowerlineDiscoverListSensor(
+                coordinator,
+                mac=mac,
+                adapter_name=adapter_name,
+                sensor_name="TEI",
+                field_name="tei",
+                unique_id=f"powerline_adapter_{adapter_index_map[mac]}_tei",
+                icon="mdi:numeric",
+            )
+        )
+        
+        # SNID
+        entities.append(
+            PowerlineDiscoverListSensor(
+                coordinator,
+                mac=mac,
+                adapter_name=adapter_name,
+                sensor_name="SNID",
+                field_name="snid",
+                unique_id=f"powerline_adapter_{adapter_index_map[mac]}_snid",
+                icon="mdi:identifier",
+            )
+        )
+        
+        # CCo
+        entities.append(
+            PowerlineDiscoverListBooleanSensor(
+                coordinator,
+                mac=mac,
+                adapter_name=adapter_name,
+                sensor_name="CCo",
+                field_name="cco",
+                unique_id=f"powerline_adapter_{adapter_index_map[mac]}_cco",
+                icon="mdi:router-network",
+            )
+        )
+        
+        # PCo
+        entities.append(
+            PowerlineDiscoverListBooleanSensor(
+                coordinator,
+                mac=mac,
+                adapter_name=adapter_name,
+                sensor_name="PCo",
+                field_name="pco",
+                unique_id=f"powerline_adapter_{adapter_index_map[mac]}_pco",
+                icon="mdi:router-wireless",
+            )
+        )
+        
+        # Backup CCo
+        entities.append(
+            PowerlineDiscoverListBooleanSensor(
+                coordinator,
+                mac=mac,
+                adapter_name=adapter_name,
+                sensor_name="Backup CCo",
+                field_name="bcco",
+                unique_id=f"powerline_adapter_{adapter_index_map[mac]}_bcco",
+                icon="mdi:backup-restore",
+            )
+        )
+        
+        # Signal Level
+        entities.append(
+            PowerlineDiscoverListSignalSensor(
+                coordinator,
+                mac=mac,
+                adapter_name=adapter_name,
+                sensor_name="Signal Level",
+                field_name="signal_level",
+                unique_id=f"powerline_adapter_{adapter_index_map[mac]}_signal",
+                icon="mdi:signal",
             )
         )
 
@@ -248,3 +342,159 @@ class PowerlineMeshSensor(CoordinatorEntity, SensorEntity):
             "model": "Powerline Adapter",
             "manufacturer": "Unknown",
         }
+
+
+def _format_signal_level(level: int) -> str:
+    """Format signal level (0-15) to human readable string."""
+    if level == 0:
+        return "Not available"
+    elif level == 15:
+        return "≤ -75 dB"
+    elif level == 1:
+        return "-10 to 0 dB"
+    else:
+        # Levels 2-14: Each step is 5 dB
+        upper = -5 * level
+        lower = -5 * (level + 1)
+        return f"{lower} to {upper} dB"
+
+
+class PowerlineBooleanSensor(PowerlineStaticSensor):
+    """Static boolean sensor showing Yes/No."""
+    
+    @property
+    def native_value(self):
+        return "Yes" if self._value else "No"
+
+
+class PowerlineDiscoverListSensor(CoordinatorEntity, SensorEntity):
+    """Sensor that gets its value from discover-list data."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_should_poll = False
+
+    def __init__(
+        self,
+        coordinator,
+        *,
+        mac: str,
+        adapter_name: str,
+        sensor_name: str,
+        field_name: str,
+        unique_id: str,
+        icon: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._mac = mac
+        self._adapter_name = adapter_name
+        self._sensor_name = sensor_name
+        self._field_name = field_name
+        self._attr_unique_id = unique_id
+        self._attr_icon = icon
+        self._update_listener = None
+
+    async def async_added_to_hass(self) -> None:
+        """Register event listener when entity is added."""
+        await super().async_added_to_hass()
+        
+        # Listen for discover-list updates
+        self._update_listener = self.hass.bus.async_listen(
+            f"{DOMAIN}_discover_list_updated",
+            self._handle_discover_list_update
+        )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Remove event listener when entity is removed."""
+        await super().async_will_remove_from_hass()
+        if self._update_listener:
+            self._update_listener()
+
+    async def _handle_discover_list_update(self, event):
+        """Handle discover-list update event."""
+        if event.data.get("mac") == self._mac:
+            self.async_write_ha_state()
+
+    @property
+    def name(self):
+        """Return the name."""
+        return f"{self._sensor_name}"
+
+    @property
+    def native_value(self):
+        """Get value from discover-list data."""
+        # Access discover-list data from the integration data
+        entry_data = self.hass.data.get(DOMAIN, {})
+        for entry_id, data in entry_data.items():
+            discover_list_data = data.get("discover_list_data", {})
+            # Look through ALL adapters' discover-list data to find info about THIS adapter
+            for reporting_mac, disc_data in discover_list_data.items():
+                stations = disc_data.get("stations", [])
+                
+                # Find this adapter in the reporting adapter's station list
+                for station in stations:
+                    if station.get("mac", "").lower() == self._mac:
+                        value = station.get(self._field_name)
+                        if value is not None:
+                            return str(value)
+        
+        return "Unknown"
+
+    @property
+    def available(self) -> bool:
+        """Always available."""
+        return True
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._mac)},
+            "name": self._adapter_name,
+            "model": "Powerline Adapter",
+            "manufacturer": "Unknown",
+        }
+
+
+class PowerlineDiscoverListBooleanSensor(PowerlineDiscoverListSensor):
+    """Boolean sensor from discover-list data."""
+    
+    @property
+    def native_value(self):
+        """Get boolean value and convert to Yes/No."""
+        # Access discover-list data from the integration data
+        entry_data = self.hass.data.get(DOMAIN, {})
+        for entry_id, data in entry_data.items():
+            discover_list_data = data.get("discover_list_data", {})
+            # Look through ALL adapters' discover-list data to find info about THIS adapter
+            for reporting_mac, disc_data in discover_list_data.items():
+                stations = disc_data.get("stations", [])
+                
+                # Find this adapter in the reporting adapter's station list
+                for station in stations:
+                    if station.get("mac", "").lower() == self._mac:
+                        value = station.get(self._field_name, False)
+                        return "Yes" if value else "No"
+        
+        return "No"
+
+
+class PowerlineDiscoverListSignalSensor(PowerlineDiscoverListSensor):
+    """Signal level sensor with special formatting."""
+    
+    @property
+    def native_value(self):
+        """Get signal level and format it."""
+        # Access discover-list data from the integration data
+        entry_data = self.hass.data.get(DOMAIN, {})
+        for entry_id, data in entry_data.items():
+            discover_list_data = data.get("discover_list_data", {})
+            # Look through ALL adapters' discover-list data to find info about THIS adapter
+            for reporting_mac, disc_data in discover_list_data.items():
+                stations = disc_data.get("stations", [])
+                
+                # Find this adapter in the reporting adapter's station list
+                for station in stations:
+                    if station.get("mac", "").lower() == self._mac:
+                        signal_level = station.get(self._field_name, 0)
+                        return _format_signal_level(signal_level)
+        
+        return "Unknown"
