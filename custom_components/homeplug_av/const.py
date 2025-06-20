@@ -1,4 +1,4 @@
-DOMAIN = "homeplug_av
+DOMAIN = "powerline_stats"
 
 PLATFORMS = ["sensor", "binary_sensor", "button"]
 

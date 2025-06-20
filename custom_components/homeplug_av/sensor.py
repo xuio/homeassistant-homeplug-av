@@ -54,7 +54,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 adapter_name=adapter_name,
                 sensor_name="MAC Address",
                 value=mac,
-                unique_id=f"powerline_adapter_{adapter_index_map[mac]}_mac",
+                unique_id=f"powerline_{mac}_mac",
                 icon="mdi:ethernet",
             )
         )
@@ -66,7 +66,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 adapter_name=adapter_name,
                 sensor_name="Interface",
                 value=interface,
-                unique_id=f"powerline_adapter_{adapter_index_map[mac]}_interface",
+                unique_id=f"powerline_{mac}_interface",
                 icon="mdi:cable-data",
             )
         )
@@ -78,7 +78,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 adapter_name=adapter_name,
                 sensor_name="HFID",
                 value=hfid,
-                unique_id=f"powerline_adapter_{adapter_index_map[mac]}_hfid",
+                unique_id=f"powerline_{mac}_hfid",
                 icon="mdi:identifier",
             )
         )
@@ -106,7 +106,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 adapter_name=adapter_name,
                 sensor_name="TEI",
                 field_name="tei",
-                unique_id=f"powerline_adapter_{adapter_index_map[mac]}_tei",
+                unique_id=f"powerline_{mac}_tei",
                 icon="mdi:numeric",
             )
         )
@@ -119,7 +119,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 adapter_name=adapter_name,
                 sensor_name="SNID",
                 field_name="snid",
-                unique_id=f"powerline_adapter_{adapter_index_map[mac]}_snid",
+                unique_id=f"powerline_{mac}_snid",
                 icon="mdi:identifier",
             )
         )
@@ -132,7 +132,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 adapter_name=adapter_name,
                 sensor_name="CCo",
                 field_name="cco",
-                unique_id=f"powerline_adapter_{adapter_index_map[mac]}_cco",
+                unique_id=f"powerline_{mac}_cco",
                 icon="mdi:router-network",
             )
         )
@@ -145,7 +145,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 adapter_name=adapter_name,
                 sensor_name="PCo",
                 field_name="pco",
-                unique_id=f"powerline_adapter_{adapter_index_map[mac]}_pco",
+                unique_id=f"powerline_{mac}_pco",
                 icon="mdi:router-wireless",
             )
         )
@@ -158,7 +158,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 adapter_name=adapter_name,
                 sensor_name="Backup CCo",
                 field_name="bcco",
-                unique_id=f"powerline_adapter_{adapter_index_map[mac]}_bcco",
+                unique_id=f"powerline_{mac}_bcco",
                 icon="mdi:backup-restore",
             )
         )
@@ -171,7 +171,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 adapter_name=adapter_name,
                 sensor_name="Signal Level",
                 field_name="signal_level",
-                unique_id=f"powerline_adapter_{adapter_index_map[mac]}_signal",
+                unique_id=f"powerline_{mac}_signal",
                 icon="mdi:signal",
             )
         )
@@ -192,8 +192,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
         
         source_name = f"Adapter {adapter_index_map.get(source_mac, '?')}"
         target_name = f"Adapter {adapter_index_map.get(target_mac, '?')}"
-        source_idx = adapter_index_map.get(source_mac, 0)
-        target_idx = adapter_index_map.get(target_mac, 0)
         
         # Create TX sensor (source -> target)
         entities.append(
@@ -204,7 +202,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 source_name=source_name,
                 target_name=target_name,
                 direction="tx",
-                unique_id=f"powerline_adapter_{source_idx}_to_{target_idx}_tx",
+                unique_id=f"powerline_{source_mac}_to_{target_mac}_tx",
             )
         )
         
@@ -217,7 +215,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 source_name=source_name,
                 target_name=target_name,
                 direction="rx",
-                unique_id=f"powerline_adapter_{source_idx}_to_{target_idx}_rx",
+                unique_id=f"powerline_{source_mac}_from_{target_mac}_rx",
             )
         )
 

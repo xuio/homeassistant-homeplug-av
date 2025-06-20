@@ -64,7 +64,7 @@ class PowerlineRestartButton(ButtonEntity):
         self._lock = lock
         self._hass = hass
         self._adapter_idx = int(adapter_name.split()[-1])
-        self._attr_unique_id = f"powerline_adapter_{self._adapter_idx}_restart"
+        self._attr_unique_id = f"powerline_{mac}_restart"
         self._attr_name = "Restart"
 
     async def async_press(self) -> None:

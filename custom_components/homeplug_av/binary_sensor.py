@@ -55,7 +55,7 @@ class PowerlineOnlineSensor(CoordinatorEntity, BinarySensorEntity):
         self._mac = mac
         self._adapter_name = adapter_name
         self._adapter_idx = int(adapter_name.split()[-1])  # Extract number from "Adapter N"
-        self._attr_unique_id = f"powerline_adapter_{self._adapter_idx}_online"
+        self._attr_unique_id = f"powerline_{mac}_online"
         self._online_macs = online_macs
         # Determine initial state based on discover data
         self._last_state = mac.lower() in online_macs
