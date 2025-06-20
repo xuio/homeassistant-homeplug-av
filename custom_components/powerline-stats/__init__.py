@@ -67,6 +67,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "adapters": adapters,
         "online_macs": online_macs,
         "lock": network_lock,
+        "index_map": {},
         "discover_list_data": discover_list_data,
     }
 
@@ -151,6 +152,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # ------------------------------------------------------------------
+    # Build stable adapter index mapping (Adapter 1, Adapter 2, …) stored in
+    # config entry options so it survives Home Assistant restarts.
+    # ------------------------------------------------------------------
+
+    existing_map: dict[str, int] = hass.data[DOMAIN][entry.entry_id]["index_map"]
+
+    # Ensure keys are lower-case MAC strings
+    existing_map = {k.lower(): v for k, v in existing_map.items()}
+
+    next_idx = max(existing_map.values(), default=0) + 1
+
+    for adapter in adapters:
+        mac_lc = adapter["mac"].lower()
+        if mac_lc not in existing_map:
+            existing_map[mac_lc] = next_idx
+            next_idx += 1
+
+    # Persist mapping if it changed
+    if existing_map != hass.data[DOMAIN][entry.entry_id]["index_map"]:
+        new_options = dict(entry.options)
+        new_options["index_map"] = existing_map
+        hass.config_entries.async_update_entry(entry, options=new_options)
 
     return True
 
