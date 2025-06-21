@@ -1,4 +1,4 @@
-"""Button platform for Powerline Stats (adapter restart)."""
+"""Button platform for Homeplug AV (adapter restart)."""
 
 from __future__ import annotations
 

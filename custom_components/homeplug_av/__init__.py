@@ -1,4 +1,4 @@
-"""Powerline Stats integration."""
+"""Homeplug AV integration."""
 
 from __future__ import annotations
 

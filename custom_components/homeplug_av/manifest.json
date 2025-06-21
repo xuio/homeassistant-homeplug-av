@@ -1,11 +1,11 @@
 {
-  "domain": "powerline_stats",
-  "name": "Powerline Stats",
+  "domain": "homeplug_av",
+  "name": "Homeplug AV",
   "version": "0.1.0",
   "documentation": "https://github.com/example/powerline-stats-homeassistant",
   "requirements": [
     "scapy>=2.6.1,<3.0"
   ],
-  "codeowners": ["@your_github_handle"],
+  "codeowners": ["@xuio"],
   "config_flow": true
 }

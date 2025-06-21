@@ -1,4 +1,4 @@
-"""Binary sensor platform for Powerline Stats (online status)."""
+"""Binary sensor platform for Homeplug AV (online status)."""
 
 from __future__ import annotations
 

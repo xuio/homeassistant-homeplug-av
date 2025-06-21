@@ -1,4 +1,4 @@
-"""Config flow for Powerline Stats integration."""
+"""Config flow for Homeplug AV integration."""
 
 from __future__ import annotations
 
@@ -70,8 +70,8 @@ def _build_interface_selector(default: str | None = None):
     )
 
 
-class PowerlineStatsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Powerline Stats."""
+class HomeplugAVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for Homeplug AV."""
 
     VERSION = 1
 
@@ -98,7 +98,7 @@ class PowerlineStatsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_configured()
 
             return self.async_create_entry(
-                title=f"Powerline ({user_input['interface']})",
+                title=f"Homeplug AV ({user_input['interface']})",
                 data=user_input,
             )
 
@@ -109,10 +109,10 @@ class PowerlineStatsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(self, config_entry):
         """Return the options flow handler."""
-        return PowerlineStatsOptionsFlowHandler(config_entry)
+        return HomeplugAVOptionsFlowHandler(config_entry)
 
 
-class PowerlineStatsOptionsFlowHandler(config_entries.OptionsFlow):
+class HomeplugAVOptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options for a config entry."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:

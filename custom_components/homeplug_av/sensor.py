@@ -1,4 +1,4 @@
-"""Sensor platform for Powerline Stats."""
+"""Sensor platform for Homeplug AV."""
 
 from __future__ import annotations
 
