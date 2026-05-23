@@ -1,28 +1,204 @@
-# Homeplug AV Integration for Home Assistant
+# HomePlug AV for Home Assistant
 
-This custom integration discovers HomePlug-AV / AV2 adapters on your network, polls them for statistics, and exposes sensors, binary sensors and buttons in Home Assistant.
+[![Tests](https://github.com/xuio/homeassistant-homeplug-av/actions/workflows/tests.yml/badge.svg)](https://github.com/xuio/homeassistant-homeplug-av/actions/workflows/tests.yml)
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://www.hacs.xyz/)
+[![Home Assistant 2024.8+](https://img.shields.io/badge/Home%20Assistant-2024.8%2B-41BDF5.svg)](https://www.home-assistant.io/)
+[![GitHub Release](https://img.shields.io/github/v/release/xuio/homeassistant-homeplug-av?sort=semver)](https://github.com/xuio/homeassistant-homeplug-av/releases)
+
+HomePlug AV is a Home Assistant custom integration for monitoring powerline
+adapters on the local Ethernet segment. It discovers HomePlug AV/AV2 devices,
+polls mesh link rates, exposes adapter diagnostics, and provides restart and
+diagnostic services from Home Assistant.
+
+The integration includes a bundled Python HomePlug utility layer with support
+for standard HomePlug AV management frames, Broadcom/MediaXtream-style adapter
+commands, and Qualcomm Atheros vendor commands used by QCA-based adapters such
+as the UniFi two-wire PoE extender.
+
+## Contents
+
+- [Highlights](#highlights)
+- [Supported Hardware](#supported-hardware)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Options](#options)
+- [Entities](#entities)
+- [Services](#services)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+
+## Highlights
+
+- Discovers adapters directly on a selected network interface.
+- Creates one Home Assistant device per adapter with stable adapter numbering.
+- Exposes online state, firmware/chipset metadata, HomePlug capability data,
+  discover-list details, and mesh TX/RX link rates.
+- Retains last good nonzero link rates across transient polling glitches.
+- Handles mixed QCA/HomePlug AV networks without creating duplicate entities.
+- Adds services for immediate discovery refresh, stats refresh, and diagnostic
+  dumps.
+- Includes regression tests and a VM soak harness for restart and packet-loss
+  hardening.
+
+## Supported Hardware
+
+The integration is designed for HomePlug AV and HomePlug AV2 adapters that
+respond to local HomePlug management frames on EtherType `0x88e1`.
+
+Observed and tested:
+
+| Device family | Backend | Notes |
+| --- | --- | --- |
+| UniFi two-wire PoE extender | QCA / Qualcomm Atheros | Reports as QCA6410 with vendor network stats. |
+| HomePlug AV2 adapters with OUI `00:1f:84` | Standard HomePlug | Discovery works; optional stats depend on chipset support. |
+| Broadcom/MediaXtream-style adapters | Broadcom | Original command path retained. |
+
+Powerline management traffic is Layer 2 traffic. The Home Assistant host must
+be on the same Ethernet broadcast domain as the adapters, and the Home
+Assistant process must be allowed to open raw Ethernet sockets.
 
 ## Installation
 
-1. Copy the `custom_components/homeplug_av` directory into your Home Assistant `custom_components` folder (or install via HACS using the _Custom Repository_ URL).
+### HACS
+
+1. Open HACS.
+2. Add this repository as a custom repository:
+   `https://github.com/xuio/homeassistant-homeplug-av`
+3. Select category `Integration`.
+4. Install `HomePlug AV`.
+5. Restart Home Assistant.
+
+### Manual
+
+1. Copy `custom_components/homeplug_av` into your Home Assistant
+   `custom_components` directory.
 2. Restart Home Assistant.
-3. Navigate to **Settings → Devices & Services → Add Integration** and search for **Homeplug AV**.
-4. Select the network interface that connects to your power-line adapters and click **Submit**.
+3. Open `Settings -> Devices & services -> Add integration`.
+4. Search for `HomePlug AV`.
 
-A device is created for each adapter it finds. Entities update every 30 seconds by default.
+## Configuration
 
-## Entities
+During setup, select the network interface connected to the powerline network.
+This is usually a wired Ethernet interface such as `eth0`, `enp3s0`, or
+`end0`.
 
-| Entity Type | Example ID | Description |
-|-------------|-----------|-------------|
-| Online | `binary_sensor.powerline_adapter_1_online` | Connectivity status |
-| Restart button | `button.powerline_adapter_1_restart` | Reboot the adapter |
-| Interface | `sensor.powerline_adapter_1_interface` | Connection interface (MII0, PLC…) |
-| HFID | `sensor.powerline_adapter_1_hfid` | Firmware string |
-| MAC address | `sensor.powerline_adapter_1_mac` | Adapter MAC |
-| TEI / SNID / CCo … | `sensor.powerline_adapter_1_tei` | Extended diagnostics |
-| Mesh rate | `sensor.powerline_adapter_1_to_2_tx` | TX rate from Adapter 1 → Adapter 2 |
+Avoid Wi-Fi for production use. Many Wi-Fi bridges and VM networking stacks use
+MACNAT or filtering that prevents HomePlug replies from reaching Home
+Assistant. The repository contains development-only relay tooling for this
+case, but the normal deployment should use a direct wired interface.
 
 ## Options
 
-* **Scan interval** – seconds between polls (default 30). Adjustable in the integration options.
+| Option | Default | Description |
+| --- | ---: | --- |
+| Scan interval | 30 seconds | Poll interval for discovery and mesh statistics. |
+| Adapter retention | 24 hours | How long offline adapters are retained before their registry entries are pruned. |
+| Link retention | 5 minutes | How long stale mesh links are retained before their registry entries are pruned. |
+
+## Entities
+
+Each adapter is represented as a Home Assistant device named `Adapter 1`,
+`Adapter 2`, and so on. Adapter indexes are persisted so names remain stable
+across restarts. Entity IDs are generated by Home Assistant from the entity
+names and may include suffixes when multiple adapters expose the same label;
+the stable unique IDs include the adapter MAC address.
+
+| Entity | Typical name | Description |
+| --- | --- | --- |
+| Online | Online | Whether discovery currently sees the adapter. |
+| Restart | Restart | Sends a restart command to the adapter. |
+| MAC address | MAC Address | Adapter MAC address. |
+| Interface | Interface | Interface reported by the adapter, such as PLC or MII. |
+| HFID | HFID | Human-friendly firmware identifier when available. |
+| Backend | Backend | Polling backend selected for the adapter. |
+| Chipset / firmware | Chipset, Firmware | QCA or capability metadata when available. |
+| Discover-list fields | TEI, SNID, CCo | HomePlug network role and membership details. |
+| Mesh rates | Adapter 2 TX, Adapter 2 RX | TX/RX PHY rates for a link from one adapter to another. |
+| Mesh diagnostics | BDA, TX Coupling | Link-level diagnostics, disabled by default. |
+
+Some diagnostic entities are disabled by default to keep normal dashboards
+small. Enable them from the device page when needed.
+
+## Services
+
+The integration exposes these services under the `homeplug_av` domain:
+
+| Service | Description |
+| --- | --- |
+| `refresh_discovery` | Immediately refresh adapter discovery and discover-list snapshots. |
+| `refresh_stats` | Immediately refresh retained mesh rate statistics. |
+| `dump_adapter_diagnostics` | Log and emit a diagnostics payload for one adapter or a whole config entry. |
+
+`dump_adapter_diagnostics` can optionally collect live QCA debug data. Use that
+option sparingly because it sends extra management frames to the adapters.
+
+## Troubleshooting
+
+### No adapters are discovered
+
+- Verify Home Assistant is running on a host connected to the same wired
+  Ethernet segment as the powerline adapters.
+- Verify the selected interface is the physical Ethernet interface, not a
+  Docker bridge, VLAN, or loopback interface.
+- Verify the Home Assistant process has raw socket permissions. Home Assistant
+  OS and supervised installs usually run with the required privileges. A custom
+  container may need `NET_RAW`, `NET_ADMIN`, or host networking depending on
+  the deployment.
+
+### Adapters appear but stats are incomplete
+
+Different chipsets expose different management commands. Capability discovery
+may work even when optional discover-list or network-stat commands time out.
+The integration keeps the adapter online and exposes unavailable diagnostics
+instead of creating parser errors.
+
+### Link speed briefly drops or becomes unavailable
+
+Transient zero-rate samples are ignored once a previous good sample exists. If
+all polling fails for longer than the link retention window, the link becomes
+unavailable and is eventually pruned.
+
+### Running in a VM over Wi-Fi
+
+Production should use wired Ethernet. For development, see
+[`tools/homeplug_wifi_development.md`](tools/homeplug_wifi_development.md) for
+the macOS Wi-Fi MACNAT relay and VM soak harness.
+
+## Development
+
+Create a development environment:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
+```
+
+Run the fast tests:
+
+```bash
+python -m pytest -q
+python -m compileall -q custom_components/homeplug_av tests tools
+```
+
+Use the bundled utility directly when debugging the wire protocol:
+
+```bash
+cd custom_components/homeplug_av/pla-util-py
+sudo python -m pla_util_py --interface eth0 discover
+```
+
+Repository layout:
+
+| Path | Purpose |
+| --- | --- |
+| `custom_components/homeplug_av` | Home Assistant integration. |
+| `custom_components/homeplug_av/pla-util-py` | Bundled HomePlug management utility. |
+| `tests` | Unit and regression tests. |
+| `tools` | VM soak harness and macOS Wi-Fi relay tooling. |
+
+## License
+
+The bundled `pla-util-py` code is GPL-3.0-or-later; see
+[`custom_components/homeplug_av/pla-util-py/LICENSE`](custom_components/homeplug_av/pla-util-py/LICENSE).

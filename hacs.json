@@ -1,5 +1,10 @@
 {
-  "name": "Homeplug AV",
+  "name": "HomePlug AV",
+  "domains": [
+    "binary_sensor",
+    "button",
+    "sensor"
+  ],
   "homeassistant": "2024.8",
   "render_readme": true,
   "zip_release": false

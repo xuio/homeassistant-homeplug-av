@@ -1,0 +1,66 @@
+name: Bug report
+description: Report a HomePlug AV integration issue.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Include enough adapter and Home Assistant details to reproduce the issue. Logs from `custom_components.homeplug_av` at debug level are especially useful.
+  - type: input
+    id: home_assistant_version
+    attributes:
+      label: Home Assistant version
+      placeholder: "2026.5.0"
+    validations:
+      required: true
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration version or commit
+      placeholder: "0.1.0 / commit SHA"
+    validations:
+      required: true
+  - type: textarea
+    id: adapters
+    attributes:
+      label: Adapter models and MAC OUIs
+      description: List the powerline adapters involved and their chipsets if known.
+      placeholder: |
+        UniFi two-wire PoE extender, 58:d6:1f:...
+        HomePlug AV2 adapter, 20:23:51:...
+    validations:
+      required: true
+  - type: input
+    id: interface
+    attributes:
+      label: Selected network interface
+      placeholder: "eth0 / enp0s1 / end0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install_type
+    attributes:
+      label: Home Assistant install type
+      options:
+        - Home Assistant OS
+        - Home Assistant Supervised
+        - Home Assistant Container
+        - Home Assistant Core
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the behavior, expected behavior, and how often it happens.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or diagnostics
+      description: Paste debug logs or the output of the `homeplug_av.dump_adapter_diagnostics` service.
+      render: text

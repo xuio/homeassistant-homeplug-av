@@ -3,6 +3,10 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Local operating-system files
+.DS_Store
+._*
+
 # C extensions
 *.so
 
@@ -184,6 +188,12 @@ cython_debug/
 
 # Ruff stuff:
 .ruff_cache/
+
+# Local Home Assistant development state
+.storage/
+home-assistant*.db*
+known_devices.yaml
+secrets.yaml
 
 # PyPI configuration file
 .pypirc

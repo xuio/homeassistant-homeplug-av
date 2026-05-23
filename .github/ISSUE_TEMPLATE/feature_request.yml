@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest support for a device, command, or integration behavior.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should the integration be able to do?
+    validations:
+      required: true
+  - type: textarea
+    id: adapter
+    attributes:
+      label: Adapter or chipset details
+      description: Include model names, MAC OUIs, command output, or packet captures when relevant.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Describe why this would help and any constraints you know about.

@@ -4,7 +4,9 @@ A partial Python port of [pla-util](https://github.com/serock/pla-util), a utili
 for managing HomePlug AV2/Broadcom-based power-line adapters (PLA) under Linux.
 
 This implementation focuses on the most commonly used diagnostic commands and
-is meant for quick scripting/debugging rather than full feature parity.
+is meant for quick scripting/debugging rather than full feature parity. This
+vendored copy is used by the Home Assistant HomePlug AV integration and also
+contains Qualcomm Atheros vendor commands needed for QCA-based adapters.
 
 ## Features
 
@@ -12,6 +14,8 @@ is meant for quick scripting/debugging rather than full feature parity.
 * Query capabilities, discover-list, network-stats
 * Retrieve human-friendly ID (HFID) and basic identification info
 * Show network-info (member scope) and minimal station-info
+* Query Qualcomm Atheros software version, network info, network-info stats,
+  link stats, restart, and operational attributes
 * Reset / restart adapter
 
 ## Quick start
@@ -43,10 +47,22 @@ is meant for quick scripting/debugging rather than full feature parity.
    python -m pla_util_py --help
    ```
 
+## QCA examples
+
+```bash
+sudo python -m pla_util_py --interface eth0 --pla-mac 58:d6:1f:00:00:01 qca-get-network-info
+sudo python -m pla_util_py --interface eth0 --pla-mac 58:d6:1f:00:00:01 qca-get-op-attributes
+sudo python -m pla_util_py --interface eth0 --pla-mac 58:d6:1f:00:00:01 qca-get-link-stats --peer-mac 58:d6:1f:00:00:02
+```
+
+Optional commands return empty structured values when a target adapter does not
+reply. This lets callers distinguish "supported but no data" from parser
+failures.
+
 ## License
 
 This port is released under the **GNU General Public License, version 3 or
-(later)** – the same license as the original C/Ada implementation.
+(later)**, the same license as the original C/Ada implementation.
 
 The code was adapted from John Serock's [pla-util] project and therefore
 remains GPL-compatible.
