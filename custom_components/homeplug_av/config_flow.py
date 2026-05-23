@@ -10,7 +10,15 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 
-from .const import DOMAIN
+from .const import (
+    CONF_ADAPTER_RETENTION_SECONDS,
+    CONF_LINK_RETENTION_SECONDS,
+    CONF_SCAN_INTERVAL,
+    DEFAULT_ADAPTER_RETENTION_SECONDS,
+    DEFAULT_LINK_RETENTION_SECONDS,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+)
 
 import socket
 
@@ -73,7 +81,7 @@ def _build_interface_selector(default: str | None = None):
 class HomeplugAVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Homeplug AV."""
 
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -87,7 +95,7 @@ class HomeplugAVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         data_schema = vol.Schema(
             {
                 vol.Required("interface"): interface_selector,
-                vol.Optional("scan_interval", default=30): vol.All(
+                vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): vol.All(
                     int, vol.Range(min=5)
                 ),
             }
@@ -122,14 +130,33 @@ class HomeplugAVOptionsFlowHandler(config_entries.OptionsFlow):
         """Manage the options for the custom component."""
 
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            options = dict(self.config_entry.options)
+            options.update(user_input)
+            return self.async_create_entry(title="", data=options)
 
         options_schema = vol.Schema(
             {
                 vol.Optional(
-                    "scan_interval",
-                    default=self.config_entry.data.get("scan_interval", 30),
+                    CONF_SCAN_INTERVAL,
+                    default=self.config_entry.options.get(
+                        CONF_SCAN_INTERVAL,
+                        self.config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+                    ),
                 ): vol.All(int, vol.Range(min=5)),
+                vol.Optional(
+                    CONF_ADAPTER_RETENTION_SECONDS,
+                    default=self.config_entry.options.get(
+                        CONF_ADAPTER_RETENTION_SECONDS,
+                        DEFAULT_ADAPTER_RETENTION_SECONDS,
+                    ),
+                ): vol.All(int, vol.Range(min=0)),
+                vol.Optional(
+                    CONF_LINK_RETENTION_SECONDS,
+                    default=self.config_entry.options.get(
+                        CONF_LINK_RETENTION_SECONDS,
+                        DEFAULT_LINK_RETENTION_SECONDS,
+                    ),
+                ): vol.All(int, vol.Range(min=0)),
             }
         )
 

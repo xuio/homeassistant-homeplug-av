@@ -1,0 +1,40 @@
+refresh_discovery:
+  name: Refresh discovery
+  description: Refresh the adapter discovery and discover-list snapshots immediately.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Optional config entry ID. If omitted, all loaded Homeplug AV entries are refreshed.
+      selector:
+        text:
+
+refresh_stats:
+  name: Refresh stats
+  description: Refresh retained mesh rate statistics immediately.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Optional config entry ID. If omitted, all loaded Homeplug AV entries are refreshed.
+      selector:
+        text:
+
+dump_adapter_diagnostics:
+  name: Dump adapter diagnostics
+  description: Emit a homeplug_av_diagnostics event and log a diagnostics payload for one adapter or the whole entry.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Optional config entry ID. If omitted, all loaded Homeplug AV entries are included.
+      selector:
+        text:
+    adapter_mac:
+      name: Adapter MAC
+      description: Optional adapter MAC address to limit the diagnostics payload.
+      selector:
+        text:
+    include_live_qca:
+      name: Include live QCA stats
+      description: Also query optional Qualcomm Atheros VS_NW_INFO_STATS and VS_LNK_STATS debug data.
+      default: false
+      selector:
+        boolean:

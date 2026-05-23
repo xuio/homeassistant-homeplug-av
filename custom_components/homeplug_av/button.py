@@ -6,9 +6,18 @@ import logging
 from typing import Any
 
 from homeassistant.components.button import ButtonEntity
+from homeassistant.core import callback
 from homeassistant.helpers.entity import EntityCategory
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import DOMAIN
+from .helpers import (
+    adapter_macs,
+    adapter_metadata,
+    adapter_name,
+    device_info,
+    snapshot_signal,
+)
 from pla_util_py import PLAUtil
 
 _LOGGER = logging.getLogger(__name__)
@@ -17,29 +26,40 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up button entities for a config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
-    adapters = data.get("adapters", [])
     lock = data.get("lock")
+    added_unique_ids: set[str] = set()
 
-    entities: list[ButtonEntity] = []
-
-    # Create adapter index mapping for consistent naming
-    adapter_map = {a["mac"].lower(): a for a in adapters}
-    adapter_index_map = {mac: idx + 1 for idx, mac in enumerate(sorted(adapter_map.keys()))}
-
-    # Create restart button for each adapter
-    for mac, adapter in adapter_map.items():
-        adapter_name = f"Adapter {adapter_index_map[mac]}"
-        entities.append(
-            PowerlineRestartButton(
-                mac=mac,
-                adapter_name=adapter_name,
-                interface=entry.data["interface"],
-                lock=lock,
-                hass=hass,
+    @callback
+    def _add_missing_entities() -> None:
+        entities: list[ButtonEntity] = []
+        desired_unique_ids: set[str] = set()
+        for mac in sorted(adapter_macs(data)):
+            unique_id = f"powerline_{mac}_restart"
+            desired_unique_ids.add(unique_id)
+            if unique_id in added_unique_ids:
+                continue
+            added_unique_ids.add(unique_id)
+            entities.append(
+                PowerlineRestartButton(
+                    mac=mac,
+                    adapter_name=adapter_name(data, mac),
+                    interface=entry.data["interface"],
+                    lock=lock,
+                    hass=hass,
+                )
             )
-        )
+        added_unique_ids.intersection_update(desired_unique_ids)
+        if entities:
+            async_add_entities(entities)
 
-    async_add_entities(entities)
+    _add_missing_entities()
+    entry.async_on_unload(
+        async_dispatcher_connect(
+            hass,
+            snapshot_signal(entry.entry_id),
+            _add_missing_entities,
+        )
+    )
 
 
 class PowerlineRestartButton(ButtonEntity):
@@ -63,7 +83,6 @@ class PowerlineRestartButton(ButtonEntity):
         self._interface = interface
         self._lock = lock
         self._hass = hass
-        self._adapter_idx = int(adapter_name.split()[-1])
         self._attr_unique_id = f"powerline_{mac}_restart"
         self._attr_name = "Restart"
 
@@ -73,7 +92,12 @@ class PowerlineRestartButton(ButtonEntity):
         
         async with self._lock:
             # Create targeted PLAUtil instance for this adapter
-            pla = PLAUtil(interface=self._interface, pla_mac=self._mac)
+            metadata = adapter_metadata(self._hass, self._mac)
+            pla = PLAUtil(
+                interface=self._interface,
+                pla_mac=self._mac,
+                backend=metadata.get("backend"),
+            )
             
             try:
                 # Execute restart command
@@ -85,9 +109,5 @@ class PowerlineRestartButton(ButtonEntity):
     @property
     def device_info(self):
         """Return device info."""
-        return {
-            "identifiers": {(DOMAIN, self._mac)},
-            "name": self._adapter_name,
-            "model": "Powerline Adapter",
-            "manufacturer": "Unknown",
-        } 
+        metadata = adapter_metadata(self._hass, self._mac)
+        return device_info(self._mac, self._adapter_name, metadata)

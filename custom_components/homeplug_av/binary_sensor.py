@@ -8,40 +8,66 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
     BinarySensorDeviceClass,
 )
+from homeassistant.core import callback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import DOMAIN
+from .helpers import (
+    adapter_macs,
+    adapter_metadata,
+    adapter_name,
+    device_info,
+    snapshot_signal,
+)
 
 _LOGGER = logging.getLogger(__name__)
-
 
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up binary sensors for a config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
-    adapters = data.get("adapters", [])
-
-    entities: list[BinarySensorEntity] = []
-
     online_macs: set[str] = data.get("online_macs", set())
+    added_unique_ids: set[str] = set()
+    entities_by_unique_id: dict[str, PowerlineOnlineSensor] = {}
 
-    # Build set of MAC addresses we know about (coordinator + discovered)
-    macs: set[str] = set(coordinator.data.keys())
-    macs.update(a["mac"].lower() for a in adapters)
+    @callback
+    def _add_missing_entities() -> None:
+        entities: list[BinarySensorEntity] = []
+        desired_unique_ids: set[str] = set()
+        for mac in sorted(adapter_macs(data) | set(coordinator.data or {})):
+            unique_id = f"powerline_{mac}_online"
+            desired_unique_ids.add(unique_id)
+            if unique_id in added_unique_ids:
+                continue
+            added_unique_ids.add(unique_id)
+            entity = PowerlineOnlineSensor(
+                coordinator,
+                online_macs,
+                mac=mac,
+                adapter_name=adapter_name(data, mac),
+            )
+            entities_by_unique_id[unique_id] = entity
+            entities.append(entity)
+        added_unique_ids.intersection_update(desired_unique_ids)
+        for unique_id in list(entities_by_unique_id):
+            if unique_id not in desired_unique_ids:
+                entities_by_unique_id.pop(unique_id, None)
+        if entities:
+            async_add_entities(entities)
+        new_unique_ids = {new_entity.unique_id for new_entity in entities}
+        for unique_id, entity in entities_by_unique_id.items():
+            if unique_id not in new_unique_ids and getattr(entity, "_hass", None) is not None:
+                entity.async_write_ha_state()
 
-    # Create adapter index mapping for consistent naming
-    adapter_index_map = {mac: idx + 1 for idx, mac in enumerate(sorted(macs))}
-
-    for mac in macs:
-        adapter_name = f"Adapter {adapter_index_map[mac]}"
-        entities.append(PowerlineOnlineSensor(
-            coordinator, 
-            online_macs, 
-            mac=mac,
-            adapter_name=adapter_name
-        ))
-
-    async_add_entities(entities)
+    _add_missing_entities()
+    entry.async_on_unload(
+        async_dispatcher_connect(
+            hass,
+            snapshot_signal(entry.entry_id),
+            _add_missing_entities,
+        )
+    )
 
 
 class PowerlineOnlineSensor(CoordinatorEntity, BinarySensorEntity):
@@ -54,7 +80,6 @@ class PowerlineOnlineSensor(CoordinatorEntity, BinarySensorEntity):
         super().__init__(coordinator)
         self._mac = mac
         self._adapter_name = adapter_name
-        self._adapter_idx = int(adapter_name.split()[-1])  # Extract number from "Adapter N"
         self._attr_unique_id = f"powerline_{mac}_online"
         self._online_macs = online_macs
         # Determine initial state based on discover data
@@ -78,9 +103,5 @@ class PowerlineOnlineSensor(CoordinatorEntity, BinarySensorEntity):
 
     @property
     def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, self._mac)},
-            "name": self._adapter_name,
-            "model": "Powerline Adapter",
-            "manufacturer": "Unknown",
-        } 
+        metadata = adapter_metadata(self.hass, self._mac)
+        return device_info(self._mac, self._adapter_name, metadata)
