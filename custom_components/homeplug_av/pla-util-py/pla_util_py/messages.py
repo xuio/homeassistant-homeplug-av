@@ -17,11 +17,25 @@ from typing import Dict
 
 __all__ = [
     "PAYLOADS",
+    "QCA_OUI",
+    "qca_payload",
     "ether_type_for_payload",
 ]
 
 # Minimum payload length used by the Ada implementation
 _MIN_LEN = 46
+
+QCA_OUI = bytes([0x00, 0xB0, 0x52])
+
+_QCA_MMV0 = 0x00
+_QCA_MMV1 = 0x01
+_QCA_VS_SW_VER = 0xA000
+_QCA_VS_LNK_STATS = 0xA030
+_QCA_VS_RS_DEV = 0xA01C
+_QCA_VS_NW_INFO = 0xA038
+_QCA_VS_OP_ATTRIBUTES = 0xA068
+_QCA_VS_NW_INFO_STATS = 0xA074
+_MMTYPE_REQ = 0x0000
 
 # fmt: off
 PAYLOADS: Dict[str, bytes] = {
@@ -103,6 +117,81 @@ PAYLOADS: Dict[str, bytes] = {
     ]),
 }
 # fmt: on
+
+
+def _qca_header(mmv: int, mmtype: int, *, fmi: bool = False) -> bytes:
+    """Build a Qualcomm/Atheros vendor-specific HomePlug header."""
+
+    header = bytes([mmv]) + mmtype.to_bytes(2, "little")
+    if fmi:
+        header += b"\x00\x00"
+    return header + QCA_OUI
+
+
+def _pad(payload: bytes) -> bytes:
+    """Pad a management payload to the minimum Ethernet payload length."""
+
+    return payload + (b"\x00" * max(0, _MIN_LEN - len(payload)))
+
+
+def _mac_to_bytes(mac: str | None) -> bytes:
+    """Convert a colon or hyphen separated MAC address to bytes."""
+
+    if not mac:
+        return b"\x00" * 6
+    clean = mac.replace(":", "").replace("-", "").lower()
+    if len(clean) != 12:
+        raise ValueError(f"Invalid MAC address: {mac}")
+    return bytes.fromhex(clean)
+
+
+def qca_payload(
+    name: str,
+    *,
+    cookie: int = 0,
+    peer_mac: str | None = None,
+    direction: int = 2,
+    lid: int = 0xF8,
+    mcontrol: int = 0,
+) -> bytes:
+    """Return a Qualcomm/Atheros management payload by name.
+
+    These messages are standard HomePlug AV frames using EtherType 0x88e1,
+    even though their MMTYPE values are vendor-specific and start with 0xa0.
+    """
+
+    if name == "sw_version":
+        payload = _qca_header(_QCA_MMV0, _QCA_VS_SW_VER | _MMTYPE_REQ)
+        payload += cookie.to_bytes(4, "little")
+        return _pad(payload)
+
+    if name == "network_info":
+        return _pad(_qca_header(_QCA_MMV1, _QCA_VS_NW_INFO | _MMTYPE_REQ, fmi=True))
+
+    if name == "network_info_stats":
+        payload = _qca_header(_QCA_MMV1, _QCA_VS_NW_INFO_STATS | _MMTYPE_REQ, fmi=True)
+        payload += b"\x00"  # MME_SUBVER
+        payload += b"\x00\x00\x00"  # reserved
+        payload += b"\x00"  # FIRST_TEI
+        payload += b"\x00" * 6  # NUM_STAS / reserved query range
+        return _pad(payload)
+
+    if name == "op_attributes":
+        payload = _qca_header(_QCA_MMV0, _QCA_VS_OP_ATTRIBUTES | _MMTYPE_REQ)
+        payload += cookie.to_bytes(4, "little")
+        payload += b"\x00"
+        return _pad(payload)
+
+    if name == "link_stats":
+        payload = _qca_header(_QCA_MMV0, _QCA_VS_LNK_STATS | _MMTYPE_REQ)
+        payload += bytes([mcontrol & 0xFF, direction & 0xFF, lid & 0xFF])
+        payload += _mac_to_bytes(peer_mac)
+        return _pad(payload)
+
+    if name == "restart":
+        return _pad(_qca_header(_QCA_MMV0, _QCA_VS_RS_DEV | _MMTYPE_REQ))
+
+    raise KeyError(f"Unknown Qualcomm/Atheros payload: {name}")
 
 for _name, _payload in PAYLOADS.items():
     if len(_payload) < _MIN_LEN:

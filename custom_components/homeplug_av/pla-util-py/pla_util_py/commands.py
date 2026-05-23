@@ -10,7 +10,7 @@ of additional work and is left for future iterations.
 from typing import Optional, Any
 import logging
 
-from .messages import PAYLOADS
+from .messages import PAYLOADS, qca_payload
 from .network import send_message, BROADCAST_MAC, send_message_collect, DEFAULT_TIMEOUT
 
 _LOG = logging.getLogger(__name__)
@@ -33,6 +33,45 @@ def _run(cmd_name: str, interface: Optional[str], pla_mac: Optional[str], timeou
     return reply
 
 
+def _run_payload(
+    payload: bytes,
+    interface: Optional[str],
+    pla_mac: Optional[str],
+    timeout: Optional[float] = None,
+    *,
+    ether_type: int | None = None,
+    response_prefix: bytes | None = None,
+):
+    dest_mac = pla_mac or BROADCAST_MAC
+    reply = send_message(
+        payload,
+        interface=interface,
+        dest_mac=dest_mac,
+        timeout=timeout or DEFAULT_TIMEOUT,
+        ether_type=ether_type,
+        response_match=_payload_prefix_match(response_prefix),
+    )
+
+    if reply is not None:
+        _LOG.info("Reply received (%d bytes)", len(reply))
+    else:
+        _LOG.warning("No reply received")
+
+    return reply
+
+
+def _payload_prefix_match(prefix: bytes | None):
+    if prefix is None:
+        return None
+
+    def _match(pkt: Any) -> bool:
+        from scapy.packet import Raw  # type: ignore
+
+        return Raw in pkt and bytes(pkt[Raw].load).startswith(prefix)
+
+    return _match
+
+
 # ---------------------------------------------------------------------------
 # Individual command entry points (exported)
 # ---------------------------------------------------------------------------
@@ -46,6 +85,40 @@ def discover(interface: Optional[str] = None, pla_mac: Optional[str] = None, *, 
         send_message_collect(payload, interface=interface, dest_mac=BROADCAST_MAC, timeout=timeout, window=timeout)
     )
     return packets
+
+
+def discover_capabilities(
+    interface: Optional[str] = None,
+    pla_mac: Optional[str] = None,
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+):
+    """Broadcast standard HomePlug AV capabilities and return all replies."""
+
+    payload = PAYLOADS["get_capabilities"]
+    dest = pla_mac or BROADCAST_MAC
+    if pla_mac:
+        pkt = send_message(
+            payload,
+            interface=interface,
+            dest_mac=dest,
+            timeout=timeout,
+            ether_type=0x88E1,
+            response_match=_payload_prefix_match(b"\x01\x35\x60"),
+        )
+        return [] if pkt is None else [pkt]
+
+    return list(
+        send_message_collect(
+            payload,
+            interface=interface,
+            dest_mac=dest,
+            timeout=timeout,
+            window=timeout,
+            ether_type=0x88E1,
+            response_match=_payload_prefix_match(b"\x01\x35\x60"),
+        )
+    )
 
 
 def get_capabilities(interface: Optional[str] = None, pla_mac: Optional[str] = None, *, timeout: float = DEFAULT_TIMEOUT):
@@ -105,6 +178,117 @@ def get_station_info(interface: Optional[str] = None, pla_mac: Optional[str] = N
     dest = pla_mac or BROADCAST_MAC
     payload = PAYLOADS["get_station_info"]
     return send_message(payload, interface=interface, dest_mac=dest, timeout=timeout)
+
+
+def qca_get_sw_version(
+    interface: Optional[str] = None,
+    pla_mac: Optional[str] = None,
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+):
+    """Request Qualcomm/Atheros hardware and firmware version information."""
+
+    return _run_payload(
+        qca_payload("sw_version"),
+        interface,
+        pla_mac,
+        timeout,
+        ether_type=0x88E1,
+        response_prefix=b"\x00\x01\xA0\x00\xB0\x52",
+    )
+
+
+def qca_get_network_info(
+    interface: Optional[str] = None,
+    pla_mac: Optional[str] = None,
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+):
+    """Request Qualcomm/Atheros network membership and PHY rate information."""
+
+    return _run_payload(
+        qca_payload("network_info"),
+        interface,
+        pla_mac,
+        timeout,
+        ether_type=0x88E1,
+        response_prefix=b"\x01\x39\xA0\x00\x00\x00\xB0\x52",
+    )
+
+
+def qca_get_network_info_stats(
+    interface: Optional[str] = None,
+    pla_mac: Optional[str] = None,
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+):
+    """Request Qualcomm/Atheros network membership and PHY stats."""
+
+    return _run_payload(
+        qca_payload("network_info_stats"),
+        interface,
+        pla_mac,
+        timeout,
+        ether_type=0x88E1,
+        response_prefix=b"\x01\x75\xA0\x00\x00\x00\xB0\x52",
+    )
+
+
+def qca_get_op_attributes(
+    interface: Optional[str] = None,
+    pla_mac: Optional[str] = None,
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+):
+    """Request Qualcomm/Atheros device attributes using VS_OP_ATTRIBUTES."""
+
+    return _run_payload(
+        qca_payload("op_attributes"),
+        interface,
+        pla_mac,
+        timeout,
+        ether_type=0x88E1,
+        response_prefix=b"\x00\x69\xA0\x00\xB0\x52",
+    )
+
+
+def qca_get_link_stats(
+    interface: Optional[str] = None,
+    pla_mac: Optional[str] = None,
+    *,
+    peer_mac: str,
+    direction: int = 2,
+    lid: int = 0xF8,
+    timeout: float = DEFAULT_TIMEOUT,
+):
+    """Request Qualcomm/Atheros per-link counters using VS_LNK_STATS."""
+
+    return _run_payload(
+        qca_payload("link_stats", peer_mac=peer_mac, direction=direction, lid=lid),
+        interface,
+        pla_mac,
+        timeout,
+        ether_type=0x88E1,
+        response_prefix=b"\x00\x31\xA0\x00\xB0\x52",
+    )
+
+
+def qca_restart(
+    interface: Optional[str] = None,
+    pla_mac: Optional[str] = None,
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+):
+    """Restart a Qualcomm/Atheros adapter using VS_RS_DEV."""
+
+    return _run_payload(
+        qca_payload("restart"),
+        interface,
+        pla_mac,
+        timeout,
+        ether_type=0x88E1,
+        response_prefix=b"\x00\x1D\xA0\x00\xB0\x52",
+    )
 
 
 # Additional helpers can be wired in the same way… 

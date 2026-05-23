@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from typing import Any, List, Dict
@@ -27,6 +28,19 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("-i", "--interface", help="Network interface to use (e.g. eth0)")
     p.add_argument("-p", "--pla", dest="pla_mac", help="Power line adapter MAC address (unicast)")
+    p.add_argument("--peer-mac", help="Peer MAC address for link-stat commands")
+    p.add_argument(
+        "--direction",
+        choices=("0", "1", "2", "tx", "rx", "both"),
+        default="both",
+        help="Link-stat direction (default: both)",
+    )
+    p.add_argument(
+        "--lid",
+        type=lambda value: int(value, 0),
+        default=0xF8,
+        help="Link ID for link-stat commands (default: 0xF8 / CSMA-PEER)",
+    )
     p.add_argument(
         "--log-level",
         choices=LOG_LEVELS,
@@ -46,6 +60,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # Map of command → callable in pla_util_py.commands
     for cmd in (
         "discover",
+        "discover-capabilities",
         "get-capabilities",
         "get-discover-list",
         "get-network-stats",
@@ -55,6 +70,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "get-id-info",
         "get-network-info",
         "get-station-info",
+        "qca-get-sw-version",
+        "qca-get-network-info",
+        "qca-get-network-info-stats",
+        "qca-get-op-attributes",
+        "qca-get-link-stats",
+        "qca-restart",
     ):
         sub.add_parser(cmd, help=f"Run the '{cmd}' request")
 
@@ -63,6 +84,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 _COMMAND_MAP = {
     "discover": commands.discover,
+    "discover-capabilities": commands.discover_capabilities,
     "get-capabilities": commands.get_capabilities,
     "get-discover-list": commands.get_discover_list,
     "get-hfid": commands.get_hfid,
@@ -70,6 +92,12 @@ _COMMAND_MAP = {
     "get-network-info": commands.get_network_info,
     "get-network-stats": commands.get_network_stats,
     "get-station-info": commands.get_station_info,
+    "qca-get-sw-version": commands.qca_get_sw_version,
+    "qca-get-network-info": commands.qca_get_network_info,
+    "qca-get-network-info-stats": commands.qca_get_network_info_stats,
+    "qca-get-op-attributes": commands.qca_get_op_attributes,
+    "qca-get-link-stats": commands.qca_get_link_stats,
+    "qca-restart": commands.qca_restart,
     "reset": commands.reset,
     "restart": commands.restart,
 }
@@ -83,7 +111,25 @@ def main(argv: list[str] | None = None):
     func = _COMMAND_MAP[args.command]
 
     try:
-        reply = func(interface=args.interface, pla_mac=args.pla_mac, timeout=args.timeout)  # type: ignore[arg-type]
+        if args.command == "qca-get-link-stats":
+            if not args.peer_mac:
+                raise ValueError("--peer-mac is required for qca-get-link-stats")
+            direction_map = {"tx": 0, "rx": 1, "both": 2}
+            direction = (
+                direction_map[args.direction]
+                if args.direction in direction_map
+                else int(args.direction)
+            )
+            reply = func(  # type: ignore[misc]
+                interface=args.interface,
+                pla_mac=args.pla_mac,
+                peer_mac=args.peer_mac,
+                direction=direction,
+                lid=args.lid,
+                timeout=args.timeout,
+            )
+        else:
+            reply = func(interface=args.interface, pla_mac=args.pla_mac, timeout=args.timeout)  # type: ignore[arg-type]
 
         if reply is None:
             print("No reply – the adapter did not respond within the timeout.")
@@ -92,6 +138,7 @@ def main(argv: list[str] | None = None):
         # Dispatch to a formatter per command ------------------------------
         formatter_map = {
             "discover": _fmt_discover,
+            "discover-capabilities": _fmt_discover_capabilities,
             "get-capabilities": _fmt_capabilities,
             "get-discover-list": _fmt_discover_list,
             "get-hfid": _fmt_hfid,
@@ -99,6 +146,11 @@ def main(argv: list[str] | None = None):
             "get-network-info": _fmt_network_info,
             "get-network-stats": _fmt_network_stats,
             "get-station-info": _fmt_station_info,
+            "qca-get-sw-version": _fmt_qca_sw_version,
+            "qca-get-network-info": _fmt_qca_network_info,
+            "qca-get-network-info-stats": _fmt_qca_network_info_stats,
+            "qca-get-op-attributes": _fmt_qca_op_attributes,
+            "qca-get-link-stats": _fmt_qca_link_stats,
         }
 
         fmt_func = formatter_map.get(args.command)
@@ -122,9 +174,6 @@ def main(argv: list[str] | None = None):
         logging.error("%s", exc)
         sys.exit(1)
 
-
-if __name__ == "__main__":  # pragma: no cover
-    main()
 
 # ---------------------------------------------------------------------------
 # Parsers / Formatters
@@ -202,6 +251,21 @@ def _fmt_capabilities(pkt: Any):
     _row("Backup CCo:", bcco)
     _row("Proxy:", proxy)
     _row("Implementation Version:", str(impl_ver))
+
+
+def _fmt_discover_capabilities(pkts: Any):
+    from pla_util_py.parsers import parse_capabilities
+
+    if not isinstance(pkts, list):
+        pkts = [pkts]
+
+    for pkt in pkts:
+        caps = parse_capabilities(pkt)
+        mac = (caps.get("source_mac") or caps["mac_address"]).lower()
+        print(
+            f"{mac} HPAV {caps['av_version']} OUI {caps['oui']} "
+            f"Backup CCo={caps['backup_cco']} Proxy={caps['proxy']}"
+        )
 
 
 def _fmt_network_stats(pkts: Any):
@@ -389,3 +453,61 @@ def _fmt_station_info(pkt: Any):
 
     print("Chip Version:                    ", chip_version)
     print("Hardware Version:                ", f"0x{hw_version:08x}")
+
+
+def _fmt_qca_sw_version(pkt: Any):
+    from pla_util_py.parsers import parse_qca_sw_version
+
+    info = parse_qca_sw_version(pkt)
+    print("Backend:                         Qualcomm/Atheros")
+    print("Source MAC:                      ", info.get("source_mac") or "--")
+    print("Chipset:                         ", info["chipset"])
+    print("Firmware:                        ", info["firmware"])
+    print("Device Class:                    ", f"0x{info['device_class']:02x}")
+    if info.get("ident") is not None:
+        print("Ident:                           ", f"0x{info['ident']:08x}")
+
+
+def _fmt_qca_network_info(pkt: Any):
+    from pla_util_py.parsers import parse_qca_network_info
+
+    info = parse_qca_network_info(pkt)
+    print("Source MAC:", info.get("source") or "--")
+    print("Number of Networks:", len(info["networks"]))
+    for idx, network in enumerate(info["networks"], 1):
+        print(f"Network {idx}:")
+        print(f"  NID:        {network['nid']}")
+        print(f"  SNID:       {network['snid']}")
+        print(f"  TEI:        {network['tei']}")
+        print(f"  Role:       {network['role']}")
+        print(f"  CCo MAC:    {network['cco_mac']}")
+        print(f"  CCo TEI:    {network['cco_tei']}")
+        for station in network["stations"]:
+            print("  Station:")
+            print(f"    MAC:      {station['mac']}")
+            print(f"    TEI:      {station['tei']}")
+            print(f"    BDA:      {station['bda']}")
+            print(f"    TX:       {station['to_rate']} Mbps ({station['tx_coupling']})")
+            print(f"    RX:       {station['from_rate']} Mbps ({station['rx_coupling']})")
+
+
+def _fmt_qca_network_info_stats(pkt: Any):
+    from pla_util_py.parsers import parse_qca_network_info_stats
+
+    print(json.dumps(parse_qca_network_info_stats(pkt), indent=2, sort_keys=True))
+
+
+def _fmt_qca_op_attributes(pkt: Any):
+    from pla_util_py.parsers import parse_qca_op_attributes
+
+    print(json.dumps(parse_qca_op_attributes(pkt), indent=2, sort_keys=True))
+
+
+def _fmt_qca_link_stats(pkt: Any):
+    from pla_util_py.parsers import parse_qca_link_stats
+
+    print(json.dumps(parse_qca_link_stats(pkt), indent=2, sort_keys=True))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
