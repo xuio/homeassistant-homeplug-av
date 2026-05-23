@@ -36,6 +36,7 @@ class HarnessConfig:
     scan_interval_seconds: int
     adapter_retention_seconds: int
     link_retention_seconds: int
+    qca_diagnostic_interval_seconds: int
     duration_seconds: int
     sample_interval_seconds: int
     restart_interval_seconds: int
@@ -178,6 +179,7 @@ entry = ConfigEntry(
         "scan_interval": {config.scan_interval_seconds},
         "adapter_retention_seconds": {config.adapter_retention_seconds},
         "link_retention_seconds": {config.link_retention_seconds},
+        "qca_diagnostic_interval_seconds": {config.qca_diagnostic_interval_seconds},
     }},
     source="user",
     unique_id={config.interface!r},
@@ -458,6 +460,7 @@ def parse_args(argv: list[str] | None = None) -> HarnessConfig:
     parser.add_argument("--scan-interval-seconds", type=int, default=10)
     parser.add_argument("--adapter-retention-seconds", type=int, default=3600)
     parser.add_argument("--link-retention-seconds", type=int, default=300)
+    parser.add_argument("--qca-diagnostic-interval-seconds", type=int, default=300)
     parser.add_argument("--duration-minutes", type=float, default=30)
     parser.add_argument("--sample-interval-seconds", type=int, default=60)
     parser.add_argument("--restart-interval-minutes", type=float, default=0)
@@ -483,6 +486,7 @@ def parse_args(argv: list[str] | None = None) -> HarnessConfig:
         scan_interval_seconds=args.scan_interval_seconds,
         adapter_retention_seconds=args.adapter_retention_seconds,
         link_retention_seconds=args.link_retention_seconds,
+        qca_diagnostic_interval_seconds=args.qca_diagnostic_interval_seconds,
         duration_seconds=int(args.duration_minutes * 60),
         sample_interval_seconds=args.sample_interval_seconds,
         restart_interval_seconds=int(args.restart_interval_minutes * 60),

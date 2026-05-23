@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorEntity, SensorStateClass
 
 try:
     from homeassistant.const import DATA_RATE_MEGABITS_PER_SECOND as UNIT_MBIT_S
@@ -56,6 +56,24 @@ def _format_hex(width: int):
 
 def _format_text(value: Any) -> str:
     return "Unknown" if value is None else str(value)
+
+
+def _format_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 DISCOVER_LIST_SENSOR_DEFINITIONS = (
@@ -117,10 +135,93 @@ STATIC_SENSOR_DEFINITIONS = (
 )
 
 MESH_DIAGNOSTIC_SENSOR_DEFINITIONS = (
-    ("BDA", "bda", "mdi:bridge"),
-    ("TX Coupling", "tx_coupling", "mdi:transit-connection-variant"),
-    ("RX Coupling", "rx_coupling", "mdi:transit-connection-variant"),
-    ("Target Role", "role", "mdi:account-network"),
+    ("BDA", "bda", "mdi:bridge", _format_text, None, None),
+    ("TX Coupling", "tx_coupling", "mdi:transit-connection-variant", _format_text, None, None),
+    ("RX Coupling", "rx_coupling", "mdi:transit-connection-variant", _format_text, None, None),
+    ("Target Role", "role", "mdi:account-network", _format_text, None, None),
+)
+
+QCA_LINK_DIAGNOSTIC_SENSOR_DEFINITIONS = (
+    ("QCA Link Stats Status", "qca_link_stats_status", "mdi:list-status", _format_int, None, None),
+    ("QCA Link Stats Direction", "qca_link_stats_direction", "mdi:swap-horizontal", _format_int, None, None),
+    ("QCA Link ID", "qca_link_stats_lid", "mdi:identifier", _format_int, None, None),
+    ("QCA Target TEI", "qca_link_stats_tei", "mdi:numeric", _format_int, None, None),
+    ("QCA TX MPDU ACKed", "qca_tx_mpdu_acked", "mdi:counter", _format_int, None, None),
+    ("QCA TX MPDU Collisions", "qca_tx_mpdu_collisions", "mdi:counter", _format_int, None, None),
+    ("QCA TX MPDU Failed", "qca_tx_mpdu_failed", "mdi:counter", _format_int, None, None),
+    ("QCA TX PBS Passed", "qca_tx_pbs_passed", "mdi:counter", _format_int, None, None),
+    ("QCA TX PBS Failed", "qca_tx_pbs_failed", "mdi:counter", _format_int, None, None),
+    (
+        "QCA TX PBS Error Rate",
+        "qca_tx_pbs_error_rate_percent",
+        "mdi:percent",
+        _format_float,
+        "%",
+        SensorStateClass.MEASUREMENT,
+    ),
+    (
+        "QCA TX MPDU Error Rate",
+        "qca_tx_mpdu_error_rate_percent",
+        "mdi:percent",
+        _format_float,
+        "%",
+        SensorStateClass.MEASUREMENT,
+    ),
+    ("QCA RX MPDU ACKed", "qca_rx_mpdu_acked", "mdi:counter", _format_int, None, None),
+    ("QCA RX MPDU Failed", "qca_rx_mpdu_failed", "mdi:counter", _format_int, None, None),
+    ("QCA RX PBS Passed", "qca_rx_pbs_passed", "mdi:counter", _format_int, None, None),
+    ("QCA RX PBS Failed", "qca_rx_pbs_failed", "mdi:counter", _format_int, None, None),
+    ("QCA RX BER Passed", "qca_rx_ber_passed", "mdi:counter", _format_int, None, None),
+    ("QCA RX BER Failed", "qca_rx_ber_failed", "mdi:counter", _format_int, None, None),
+    ("QCA RX Interval Count", "qca_rx_interval_count", "mdi:counter", _format_int, None, None),
+    (
+        "QCA RX PBS Error Rate",
+        "qca_rx_pbs_error_rate_percent",
+        "mdi:percent",
+        _format_float,
+        "%",
+        SensorStateClass.MEASUREMENT,
+    ),
+    (
+        "QCA RX MPDU Error Rate",
+        "qca_rx_mpdu_error_rate_percent",
+        "mdi:percent",
+        _format_float,
+        "%",
+        SensorStateClass.MEASUREMENT,
+    ),
+    (
+        "QCA RX FEC Bit Error Rate",
+        "qca_rx_fec_bit_error_rate_percent",
+        "mdi:percent",
+        _format_float,
+        "%",
+        SensorStateClass.MEASUREMENT,
+    ),
+    (
+        "QCA RX PHY Rate",
+        "qca_rx_phy_rate_mbps",
+        "mdi:speedometer",
+        _format_int,
+        UNIT_MBIT_S,
+        SensorStateClass.MEASUREMENT,
+    ),
+    (
+        "QCA RX Interval PBS Error Rate",
+        "qca_rx_interval_pbs_error_rate_percent",
+        "mdi:percent",
+        _format_float,
+        "%",
+        SensorStateClass.MEASUREMENT,
+    ),
+    (
+        "QCA RX Interval BER Error Rate",
+        "qca_rx_interval_ber_error_rate_percent",
+        "mdi:percent",
+        _format_float,
+        "%",
+        SensorStateClass.MEASUREMENT,
+    ),
 )
 
 
@@ -307,7 +408,24 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 unique_id=f"powerline_{source_mac}_from_{target_mac}_rx",
             ),
         ]
-        for sensor_name, field_name, icon in MESH_DIAGNOSTIC_SENSOR_DEFINITIONS:
+        mesh_diagnostic_definitions = list(MESH_DIAGNOSTIC_SENSOR_DEFINITIONS)
+        source_backend = adapter_metadata(hass, source_mac).get("backend")
+        target_backend = adapter_metadata(hass, target_mac).get("backend")
+        if (
+            source_backend == "qca"
+            and target_backend == "qca"
+            and not conn_data.get("derived")
+        ):
+            mesh_diagnostic_definitions.extend(QCA_LINK_DIAGNOSTIC_SENSOR_DEFINITIONS)
+
+        for (
+            sensor_name,
+            field_name,
+            icon,
+            formatter,
+            native_unit,
+            state_class,
+        ) in mesh_diagnostic_definitions:
             entities.append(
                 PowerlineMeshDiagnosticSensor(
                     coordinator,
@@ -319,6 +437,9 @@ async def async_setup_entry(hass, entry, async_add_entities):
                     field_name=field_name,
                     unique_id=f"powerline_{source_mac}_to_{target_mac}_{field_name}",
                     icon=icon,
+                    formatter=formatter,
+                    native_unit=native_unit,
+                    state_class=state_class,
                     enabled_default=False,
                 )
             )
@@ -502,6 +623,9 @@ class PowerlineMeshDiagnosticSensor(CoordinatorEntity, SensorEntity):
         field_name: str,
         unique_id: str,
         icon: str,
+        formatter=None,
+        native_unit: str | None = None,
+        state_class: SensorStateClass | None = None,
         enabled_default: bool = True,
     ) -> None:
         super().__init__(coordinator)
@@ -513,6 +637,9 @@ class PowerlineMeshDiagnosticSensor(CoordinatorEntity, SensorEntity):
         self._field_name = field_name
         self._attr_unique_id = unique_id
         self._attr_icon = icon
+        self._formatter = formatter or _format_text
+        self._attr_native_unit_of_measurement = native_unit
+        self._attr_state_class = state_class
         self._attr_entity_registry_enabled_default = enabled_default
 
     @property
@@ -525,7 +652,9 @@ class PowerlineMeshDiagnosticSensor(CoordinatorEntity, SensorEntity):
         if not conn:
             return None
         value = conn.get(self._field_name)
-        return None if value is None else str(value)
+        if value is None:
+            return None
+        return self._formatter(value)
 
     @property
     def available(self) -> bool:

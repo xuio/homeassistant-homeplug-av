@@ -18,7 +18,7 @@ from homeassistant.helpers.update_coordinator import (
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
-from .const import DOMAIN
+from .const import DEFAULT_QCA_DIAGNOSTIC_INTERVAL_SECONDS, DOMAIN
 from .helpers import adapter_macs, ensure_index_map, normalize_mac, snapshot_signal
 
 _LOGGER = logging.getLogger(__name__)
@@ -45,6 +45,7 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         lock: asyncio.Lock,
         adapter_retention_seconds: int,
         link_retention_seconds: int,
+        qca_diagnostic_interval_seconds: int = DEFAULT_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
     ) -> None:
         """Initialize."""
         self._entry_id = entry_id
@@ -54,6 +55,8 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         self.mesh_data: Dict[str, Dict[str, Any]] = {}
         self._adapter_retention_seconds = adapter_retention_seconds
         self._link_retention_seconds = link_retention_seconds
+        self._qca_diagnostic_interval_seconds = qca_diagnostic_interval_seconds
+        self._last_qca_diagnostic_refresh = 0.0
         self._last_poll_attempts = 0
 
         super().__init__(
@@ -82,6 +85,19 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         except TypeError:
             # Older version without timeout param
             return pla_targeted.network_stats()
+
+    def _qca_link_stats_call(self, source_mac: str, peer_mac: str):
+        """Return optional QCA per-link counters with a short timeout."""
+
+        pla_targeted = PLAUtil(
+            interface=self._interface,
+            pla_mac=source_mac,
+            backend="qca",
+        )
+        try:
+            return pla_targeted.qca_link_stats(peer_mac, timeout=2.0)  # type: ignore[arg-type]
+        except TypeError:
+            return pla_targeted.qca_link_stats(peer_mac)
 
     def _poll_order(
         self,
@@ -259,6 +275,114 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         }
         return True
 
+    @staticmethod
+    def _flatten_qca_link_stats(
+        stats: dict[str, Any] | None,
+        now: float,
+    ) -> dict[str, Any]:
+        """Return selected VS_LNK_STATS fields for mesh link diagnostics."""
+
+        if not stats:
+            return {}
+
+        flattened: dict[str, Any] = {
+            "qca_link_stats_updated": now,
+        }
+        for field in ("status", "direction", "lid", "tei"):
+            if stats.get(field) is not None:
+                flattened[f"qca_link_stats_{field}"] = stats[field]
+
+        if stats.get("status") not in (0, None):
+            return flattened
+
+        for section in ("tx", "rx"):
+            section_stats = stats.get(section) or {}
+            if not isinstance(section_stats, dict):
+                continue
+            for field, value in section_stats.items():
+                if field == "rx_intervals" or value is None:
+                    continue
+                flattened[f"qca_{field}"] = value
+
+        rx_stats = stats.get("rx") or {}
+        if isinstance(rx_stats, dict):
+            intervals = rx_stats.get("rx_intervals") or []
+            if intervals and isinstance(intervals[0], dict):
+                latest_interval = intervals[0]
+                interval_fields = {
+                    "rx_phy_rate_mbps": "qca_rx_phy_rate_mbps",
+                    "rx_pbs_error_rate_percent": "qca_rx_interval_pbs_error_rate_percent",
+                    "rx_ber_error_rate_percent": "qca_rx_interval_ber_error_rate_percent",
+                }
+                for source_field, target_field in interval_fields.items():
+                    if latest_interval.get(source_field) is not None:
+                        flattened[target_field] = latest_interval[source_field]
+
+        return flattened
+
+    def _qca_diagnostic_refresh_due(
+        self,
+        now: float,
+        links: list[tuple[str, str]],
+    ) -> bool:
+        """Return whether optional QCA link diagnostics should be refreshed."""
+
+        interval = getattr(
+            self,
+            "_qca_diagnostic_interval_seconds",
+            DEFAULT_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
+        )
+        if interval <= 0 or not links:
+            return False
+
+        last_refresh = getattr(self, "_last_qca_diagnostic_refresh", 0.0)
+        return now - last_refresh >= interval
+
+    async def _async_refresh_qca_link_diagnostics(
+        self,
+        mesh_data: Dict[str, Dict[str, Any]],
+        links: list[tuple[str, str]],
+        now: float,
+    ) -> None:
+        """Refresh optional QCA per-link diagnostics for fresh direct links."""
+
+        if not self._qca_diagnostic_refresh_due(now, links):
+            return
+
+        self._last_qca_diagnostic_refresh = now
+        seen: set[tuple[str, str]] = set()
+        for source_mac, peer_mac in links:
+            link = (normalize_mac(source_mac), normalize_mac(peer_mac))
+            if not link[0] or not link[1] or link in seen:
+                continue
+            seen.add(link)
+
+            key = f"{link[0]}_{link[1]}"
+            conn = mesh_data.get(key)
+            if not conn or conn.get("derived"):
+                continue
+
+            try:
+                async with self._lock:
+                    stats = await self.hass.async_add_executor_job(
+                        lambda link=link: self._qca_link_stats_call(link[0], link[1])
+                    )
+            except Exception as err:  # pragma: no cover - hardware dependent
+                _LOGGER.debug(
+                    "Failed to collect QCA link stats from %s to %s: %s",
+                    link[0],
+                    link[1],
+                    err,
+                )
+                conn["qca_link_stats_error"] = str(err)
+                conn["qca_link_stats_updated"] = now
+                continue
+
+            updates = self._flatten_qca_link_stats(stats, now)
+            if updates:
+                conn.pop("qca_link_stats_error", None)
+                conn.update(updates)
+
     def _prune_adapters(self, now: float, entry_data: dict[str, Any]) -> None:
         """Drop adapters that have been offline beyond the retention window."""
 
@@ -334,6 +458,7 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             now = time.time()
             fresh_keys: set[str] = set()
             successful_sources: set[str] = set()
+            qca_diagnostic_links: list[tuple[str, str]] = []
 
             # Process results from each adapter
             for result in results:
@@ -385,6 +510,7 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
                     source_backend = adapter_metadata.get(source_mac, {}).get("backend")
                     peer_backend = adapter_metadata.get(peer_mac, {}).get("backend")
                     if source_backend == "qca" and peer_backend == "qca":
+                        qca_diagnostic_links.append((source_mac, peer_mac))
                         reciprocal_stat = {
                             "tx_coupling": stat.get("rx_coupling"),
                             "rx_coupling": stat.get("tx_coupling"),
@@ -401,6 +527,12 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
                             stat=reciprocal_stat,
                             derived=True,
                         )
+
+            await self._async_refresh_qca_link_diagnostics(
+                mesh_data,
+                qca_diagnostic_links,
+                now,
+            )
 
             expired_links: list[tuple[str, str]] = []
             for key, previous in self.mesh_data.items():

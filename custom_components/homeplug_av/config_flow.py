@@ -13,9 +13,11 @@ from homeassistant.core import callback
 from .const import (
     CONF_ADAPTER_RETENTION_SECONDS,
     CONF_LINK_RETENTION_SECONDS,
+    CONF_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
     CONF_SCAN_INTERVAL,
     DEFAULT_ADAPTER_RETENTION_SECONDS,
     DEFAULT_LINK_RETENTION_SECONDS,
+    DEFAULT_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
 )
@@ -155,6 +157,13 @@ class HomeplugAVOptionsFlowHandler(config_entries.OptionsFlow):
                     default=self.config_entry.options.get(
                         CONF_LINK_RETENTION_SECONDS,
                         DEFAULT_LINK_RETENTION_SECONDS,
+                    ),
+                ): vol.All(int, vol.Range(min=0)),
+                vol.Optional(
+                    CONF_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
+                    default=self.config_entry.options.get(
+                        CONF_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
+                        DEFAULT_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
                     ),
                 ): vol.All(int, vol.Range(min=0)),
             }

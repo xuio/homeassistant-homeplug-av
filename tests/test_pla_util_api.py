@@ -48,3 +48,20 @@ def test_qca_network_info_returns_empty_shape_on_no_reply(monkeypatch) -> None:
         "num_stations_reported": 0,
         "in_avln": 0,
     }
+
+
+def test_qca_link_stats_returns_empty_shape_on_no_reply(monkeypatch) -> None:
+    monkeypatch.setattr(commands, "qca_get_link_stats", lambda *args, **kwargs: None)
+
+    pla = PLAUtil(interface="eth0", pla_mac="58:d6:1f:1d:42:6d", backend="qca")
+
+    assert pla.qca_link_stats("58:d6:1f:1d:46:86", timeout=0.1) == {
+        "source": "58:d6:1f:1d:42:6d",
+        "peer": "58:d6:1f:1d:46:86",
+        "status": None,
+        "direction": 2,
+        "lid": 0xF8,
+        "tei": None,
+        "tx": {},
+        "rx": {},
+    }

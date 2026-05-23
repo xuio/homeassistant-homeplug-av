@@ -34,9 +34,11 @@ from .const import (
     ATTR_INCLUDE_LIVE_QCA,
     CONF_ADAPTER_RETENTION_SECONDS,
     CONF_LINK_RETENTION_SECONDS,
+    CONF_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
     CONF_SCAN_INTERVAL,
     DEFAULT_ADAPTER_RETENTION_SECONDS,
     DEFAULT_LINK_RETENTION_SECONDS,
+    DEFAULT_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     PLATFORMS,
@@ -404,6 +406,10 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             CONF_LINK_RETENTION_SECONDS,
             DEFAULT_LINK_RETENTION_SECONDS,
         )
+        options.setdefault(
+            CONF_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
+            DEFAULT_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
+        )
         if "index_map" in options:
             options["index_map"] = {
                 normalize_mac(mac): int(index)
@@ -429,6 +435,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     link_retention_seconds: int = entry.options.get(
         CONF_LINK_RETENTION_SECONDS, DEFAULT_LINK_RETENTION_SECONDS
+    )
+    qca_diagnostic_interval_seconds: int = entry.options.get(
+        CONF_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
+        DEFAULT_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
     )
 
     pla = PLAUtil(interface=interface)
@@ -486,6 +496,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         lock=network_lock,
         adapter_retention_seconds=adapter_retention_seconds,
         link_retention_seconds=link_retention_seconds,
+        qca_diagnostic_interval_seconds=qca_diagnostic_interval_seconds,
     )
     entry_data["coordinator"] = coordinator
 

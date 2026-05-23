@@ -26,6 +26,7 @@ as the UniFi two-wire PoE extender.
 - [Services](#services)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
+- [Qualcomm Atheros Support](#qualcomm-atheros-support)
 
 ## Highlights
 
@@ -94,6 +95,7 @@ case, but the normal deployment should use a direct wired interface.
 | Scan interval | 30 seconds | Poll interval for discovery and mesh statistics. |
 | Adapter retention | 24 hours | How long offline adapters are retained before their registry entries are pruned. |
 | Link retention | 5 minutes | How long stale mesh links are retained before their registry entries are pruned. |
+| QCA diagnostic interval | 5 minutes | How often optional QCA per-link counters are refreshed. Set to `0` to disable automatic QCA link diagnostics. |
 
 ## Entities
 
@@ -115,6 +117,7 @@ the stable unique IDs include the adapter MAC address.
 | Discover-list fields | TEI, SNID, CCo | HomePlug network role and membership details. |
 | Mesh rates | Adapter 2 TX, Adapter 2 RX | TX/RX PHY rates for a link from one adapter to another. |
 | Mesh diagnostics | BDA, TX Coupling | Link-level diagnostics, disabled by default. |
+| QCA link diagnostics | QCA TX PBS Error Rate, QCA RX PHY Rate | QCA-only link counters and error-rate diagnostics, disabled by default. |
 
 Some diagnostic entities are disabled by default to keep normal dashboards
 small. Enable them from the device page when needed.
@@ -197,6 +200,13 @@ Repository layout:
 | `custom_components/homeplug_av/pla-util-py` | Bundled HomePlug management utility. |
 | `tests` | Unit and regression tests. |
 | `tools` | VM soak harness and macOS Wi-Fi relay tooling. |
+
+## Qualcomm Atheros Support
+
+Qualcomm Atheros support is currently implemented as a safe read-first backend
+and should not be released as stable until the mixed-adapter soak tests have
+run longer. The command matrix, polling policy, and current parity status are
+documented in [`docs/qualcomm-support.md`](docs/qualcomm-support.md).
 
 ## License
 

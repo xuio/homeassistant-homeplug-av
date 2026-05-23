@@ -20,15 +20,24 @@ _LOG = logging.getLogger(__name__)
 # Internal helper with timeout support
 # ---------------------------------------------------------------------------
 
-def _run(cmd_name: str, interface: Optional[str], pla_mac: Optional[str], timeout: Optional[float] = None):
+def _run(
+    cmd_name: str,
+    interface: Optional[str],
+    pla_mac: Optional[str],
+    timeout: Optional[float] = None,
+    *,
+    warn_on_no_reply: bool = True,
+):
     payload = PAYLOADS[cmd_name]
     dest_mac = pla_mac or BROADCAST_MAC
     reply = send_message(payload, interface=interface, dest_mac=dest_mac, timeout=timeout or DEFAULT_TIMEOUT)
 
     if reply is not None:
-        _LOG.info("Reply received (%d bytes)", len(reply))
+        _LOG.info("%s reply received (%d bytes)", cmd_name, len(reply))
+    elif warn_on_no_reply:
+        _LOG.warning("%s no reply received", cmd_name)
     else:
-        _LOG.warning("No reply received")
+        _LOG.debug("%s no reply received", cmd_name)
 
     return reply
 
@@ -41,6 +50,8 @@ def _run_payload(
     *,
     ether_type: int | None = None,
     response_prefix: bytes | None = None,
+    command_name: str = "command",
+    warn_on_no_reply: bool = True,
 ):
     dest_mac = pla_mac or BROADCAST_MAC
     reply = send_message(
@@ -53,9 +64,11 @@ def _run_payload(
     )
 
     if reply is not None:
-        _LOG.info("Reply received (%d bytes)", len(reply))
+        _LOG.info("%s reply received (%d bytes)", command_name, len(reply))
+    elif warn_on_no_reply:
+        _LOG.warning("%s no reply received", command_name)
     else:
-        _LOG.warning("No reply received")
+        _LOG.debug("%s no reply received", command_name)
 
     return reply
 
@@ -153,7 +166,13 @@ def restart(interface: Optional[str] = None, pla_mac: Optional[str] = None, *, t
 
 def get_discover_list(interface: Optional[str] = None, pla_mac: Optional[str] = None, *, timeout: float = DEFAULT_TIMEOUT):
     """Request the discover list from adapter(s)."""
-    return _run("get_discover_list", interface, pla_mac, timeout)
+    return _run(
+        "get_discover_list",
+        interface,
+        pla_mac,
+        timeout,
+        warn_on_no_reply=False,
+    )
 
 
 def get_hfid(interface: Optional[str] = None, pla_mac: Optional[str] = None, *, timeout: float = DEFAULT_TIMEOUT):
@@ -195,6 +214,8 @@ def qca_get_sw_version(
         timeout,
         ether_type=0x88E1,
         response_prefix=b"\x00\x01\xA0\x00\xB0\x52",
+        command_name="qca_get_sw_version",
+        warn_on_no_reply=False,
     )
 
 
@@ -213,6 +234,8 @@ def qca_get_network_info(
         timeout,
         ether_type=0x88E1,
         response_prefix=b"\x01\x39\xA0\x00\x00\x00\xB0\x52",
+        command_name="qca_get_network_info",
+        warn_on_no_reply=False,
     )
 
 
@@ -231,6 +254,8 @@ def qca_get_network_info_stats(
         timeout,
         ether_type=0x88E1,
         response_prefix=b"\x01\x75\xA0\x00\x00\x00\xB0\x52",
+        command_name="qca_get_network_info_stats",
+        warn_on_no_reply=False,
     )
 
 
@@ -249,6 +274,8 @@ def qca_get_op_attributes(
         timeout,
         ether_type=0x88E1,
         response_prefix=b"\x00\x69\xA0\x00\xB0\x52",
+        command_name="qca_get_op_attributes",
+        warn_on_no_reply=False,
     )
 
 
@@ -270,6 +297,8 @@ def qca_get_link_stats(
         timeout,
         ether_type=0x88E1,
         response_prefix=b"\x00\x31\xA0\x00\xB0\x52",
+        command_name="qca_get_link_stats",
+        warn_on_no_reply=False,
     )
 
 
@@ -288,6 +317,7 @@ def qca_restart(
         timeout,
         ether_type=0x88E1,
         response_prefix=b"\x00\x1D\xA0\x00\xB0\x52",
+        command_name="qca_restart",
     )
 
 

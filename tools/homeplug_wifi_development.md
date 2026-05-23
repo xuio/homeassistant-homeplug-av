@@ -81,9 +81,11 @@ tools/homeplug_vm_harness.py \
 ```
 
 By default the harness uses a 10 second scan interval, 1 hour adapter
-retention, and 5 minute link retention. Override
+retention, 5 minute link retention, and 5 minute QCA diagnostic interval. Override
 `--scan-interval-seconds`, `--adapter-retention-seconds`, or
-`--link-retention-seconds` when intentionally testing faster expiry.
+`--link-retention-seconds` when intentionally testing faster expiry. Override
+`--qca-diagnostic-interval-seconds` when intentionally testing QCA link
+counters faster than the production-like default.
 
 Fault scenarios require the relay control file shown above:
 

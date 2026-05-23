@@ -15,15 +15,18 @@ from custom_components.homeplug_av import (
 from custom_components.homeplug_av.const import (
     CONF_ADAPTER_RETENTION_SECONDS,
     CONF_LINK_RETENTION_SECONDS,
+    CONF_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
     CONF_SCAN_INTERVAL,
     DEFAULT_ADAPTER_RETENTION_SECONDS,
     DEFAULT_LINK_RETENTION_SECONDS,
+    DEFAULT_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
     DOMAIN,
 )
 from custom_components.homeplug_av.coordinator import PowerlineDataUpdateCoordinator
 from custom_components.homeplug_av.helpers import adapter_macs, ensure_index_map
 from custom_components.homeplug_av.sensor import (
     MESH_DIAGNOSTIC_SENSOR_DEFINITIONS,
+    QCA_LINK_DIAGNOSTIC_SENSOR_DEFINITIONS,
     STATIC_SENSOR_DEFINITIONS,
 )
 
@@ -50,6 +53,8 @@ def _coordinator() -> PowerlineDataUpdateCoordinator:
     coordinator._entry_id = "entry-id"
     coordinator._adapter_retention_seconds = DEFAULT_ADAPTER_RETENTION_SECONDS
     coordinator._link_retention_seconds = DEFAULT_LINK_RETENTION_SECONDS
+    coordinator._qca_diagnostic_interval_seconds = 0
+    coordinator._last_qca_diagnostic_refresh = 0.0
     coordinator._last_poll_attempts = 0
     return coordinator
 
@@ -194,6 +199,7 @@ def test_config_entry_migration_adds_retention_options_and_normalizes_indexes() 
         CONF_SCAN_INTERVAL: 45,
         CONF_ADAPTER_RETENTION_SECONDS: DEFAULT_ADAPTER_RETENTION_SECONDS,
         CONF_LINK_RETENTION_SECONDS: DEFAULT_LINK_RETENTION_SECONDS,
+        CONF_QCA_DIAGNOSTIC_INTERVAL_SECONDS: DEFAULT_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
         "index_map": {"aa:aa:aa:aa:aa:aa": 1},
     }
 
@@ -308,7 +314,11 @@ def test_static_and_mesh_diagnostic_descriptions_are_deterministic() -> None:
     assert "chipset" in static_fields
     assert "firmware" in static_fields
     assert "op_firmware_version" in static_fields
+    qca_fields = {definition[1] for definition in QCA_LINK_DIAGNOSTIC_SENSOR_DEFINITIONS}
+
     assert {"bda", "tx_coupling", "rx_coupling", "role"} <= mesh_fields
+    assert "qca_rx_phy_rate_mbps" in qca_fields
+    assert "qca_tx_pbs_error_rate_percent" in qca_fields
 
 
 def test_qca_poll_order_prefers_last_successful_source() -> None:
@@ -366,6 +376,92 @@ def test_record_link_stat_derives_reciprocal_qca_rates() -> None:
     assert mesh_data["bb:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]["tx_rate"] == 137
     assert mesh_data["bb:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]["rx_rate"] == 140
     assert mesh_data["bb:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]["derived"] is True
+
+
+def test_flatten_qca_link_stats_selects_entity_safe_fields() -> None:
+    flattened = PowerlineDataUpdateCoordinator._flatten_qca_link_stats(
+        {
+            "status": 0,
+            "direction": 2,
+            "lid": 0xF8,
+            "tei": 7,
+            "tx": {
+                "tx_mpdu_acked": 10,
+                "tx_pbs_failed": 2,
+                "tx_pbs_error_rate_percent": 1.23,
+            },
+            "rx": {
+                "rx_mpdu_failed": 3,
+                "rx_interval_count": 1,
+                "rx_intervals": [
+                    {
+                        "rx_phy_rate_mbps": 123,
+                        "rx_pbs_error_rate_percent": 4.56,
+                        "rx_ber_error_rate_percent": 0.12,
+                    }
+                ],
+            },
+        },
+        456.0,
+    )
+
+    assert flattened["qca_link_stats_status"] == 0
+    assert flattened["qca_link_stats_tei"] == 7
+    assert flattened["qca_tx_mpdu_acked"] == 10
+    assert flattened["qca_tx_pbs_error_rate_percent"] == 1.23
+    assert flattened["qca_rx_mpdu_failed"] == 3
+    assert flattened["qca_rx_interval_count"] == 1
+    assert flattened["qca_rx_phy_rate_mbps"] == 123
+    assert flattened["qca_rx_interval_ber_error_rate_percent"] == 0.12
+    assert "qca_rx_intervals" not in flattened
+
+
+def test_refresh_qca_link_diagnostics_updates_direct_links_only() -> None:
+    entry_data = {"adapter_metadata": {}, "adapters": []}
+    coordinator = _coordinator()
+    coordinator.hass = _FakeAsyncHass(entry_data)
+    coordinator._lock = asyncio.Lock()
+    coordinator._qca_diagnostic_interval_seconds = 1
+    coordinator._last_qca_diagnostic_refresh = 0
+    coordinator._qca_link_stats_call = lambda source, peer: {
+        "status": 0,
+        "direction": 2,
+        "lid": 0xF8,
+        "tei": 7,
+        "tx": {"tx_pbs_passed": 100, "tx_pbs_failed": 5},
+        "rx": {"rx_pbs_passed": 200, "rx_pbs_failed": 1, "rx_intervals": []},
+    }
+    mesh_data = {
+        "aa:aa:aa:aa:aa:aa_bb:bb:bb:bb:bb:bb": {
+            "source": "aa:aa:aa:aa:aa:aa",
+            "target": "bb:bb:bb:bb:bb:bb",
+            "available": True,
+            "derived": False,
+        },
+        "bb:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa": {
+            "source": "bb:bb:bb:bb:bb:bb",
+            "target": "aa:aa:aa:aa:aa:aa",
+            "available": True,
+            "derived": True,
+        },
+    }
+
+    asyncio.run(
+        coordinator._async_refresh_qca_link_diagnostics(
+            mesh_data,
+            [
+                ("aa:aa:aa:aa:aa:aa", "bb:bb:bb:bb:bb:bb"),
+                ("bb:bb:bb:bb:bb:bb", "aa:aa:aa:aa:aa:aa"),
+            ],
+            10.0,
+        )
+    )
+
+    direct = mesh_data["aa:aa:aa:aa:aa:aa_bb:bb:bb:bb:bb:bb"]
+    derived = mesh_data["bb:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]
+    assert direct["qca_tx_pbs_passed"] == 100
+    assert direct["qca_rx_pbs_failed"] == 1
+    assert "qca_tx_pbs_passed" not in derived
 
 
 def test_qca_update_uses_fallback_source_and_derives_reverse_link() -> None:

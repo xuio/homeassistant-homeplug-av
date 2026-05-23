@@ -226,7 +226,20 @@ class PLAUtil:
             lid=lid,
             timeout=timeout or commands.DEFAULT_TIMEOUT,
         )
-        return parsers.parse_qca_link_stats(pkt)
+        if pkt is None:
+            return {
+                "source": self.pla_mac,
+                "peer": peer_mac.lower(),
+                "status": None,
+                "direction": direction,
+                "lid": lid,
+                "tei": None,
+                "tx": {},
+                "rx": {},
+            }
+        parsed = parsers.parse_qca_link_stats(pkt)
+        parsed.setdefault("peer", peer_mac.lower())
+        return parsed
 
     def _qca_get_network_info_packet(self, timeout: float):
         for _ in range(2):
