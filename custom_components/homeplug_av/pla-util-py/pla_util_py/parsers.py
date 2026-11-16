@@ -11,7 +11,9 @@ from scapy.layers.l2 import Ether  # type: ignore
 from scapy.packet import Raw  # type: ignore
 
 __all__ = [
+    "is_valid_station_mac",
     "parse_discover",
+    "parse_network_stats_payload",
     "parse_capabilities",
     "parse_hfid",
     "parse_id_info",
@@ -104,15 +106,17 @@ def parse_discover(pkts: List[Any]) -> List[Dict[str, str]]:
     iface_map = {0: "MII0", 1: "MII1", 2: "PLC", 3: "PLC", 4: "SDR"}
 
     for pkt in pkts:
-        mac = pkt[Ether].src.lower()
-        if mac in seen:
+        if pkt is None or Ether not in pkt or Raw not in pkt:
             continue
-        seen.add(mac)
+        mac = pkt[Ether].src.lower()
+        if mac in seen or not is_valid_station_mac(mac):
+            continue
 
         payload = bytes(pkt[Raw].load)
-        # Confirm this is a discover confirmation: first two bytes 0x02 0x71
-        if len(payload) < 12 or payload[0] != 0x02 or payload[1] != 0x71:
+        # Confirm this is a discover confirmation: MMV 0x02, MMTYPE 0xA071
+        if len(payload) < 12 or payload[0] != 0x02 or payload[1] != 0x71 or payload[2] != 0xA0:
             continue
+        seen.add(mac)
         iface_code = payload[9]
         # HFID starts at byte 11 (offset 12 in Ada, which is 11 here) and runs to end
         hfid = payload[11:].decode("ascii", errors="replace").rstrip("\x00")
@@ -156,36 +160,141 @@ def parse_id_info(pkt: Any) -> Dict[str, str]:
     return {"hpav_version": ver, "mcs": mcs}
 
 
+# Broadcom/MediaXtream GET_NETWORK_STATS confirmation (EtherType 0x8912):
+#   [0]     MMV (0x02)
+#   [1:3]   MMTYPE, little endian (0xA02D)
+#   [3:5]   fragment info
+#   [5:8]   OUI 00:1F:84
+#   [8]     sub-command echo
+#   [9]     number of stations
+#   [10:]   stations, 10 octets each: MAC(6), to-rate(2), from-rate(2)
+NETWORK_STATS_CNF_MMTYPE = 0xA02D
+BROADCOM_OUI = b"\x00\x1f\x84"
+_NETWORK_STATS_HEADER = 10
+_NETWORK_STATS_ENTRY = 10
+
+# CM_DISCOVER_LIST.CNF (EtherType 0x88E1):
+#   [0] MMV, [1:3] MMTYPE (0x0015), [3:5] FMI, [5] station count,
+#   [6:] stations, 12 octets each.
+DISCOVER_LIST_CNF_MMTYPE = 0x0015
+_DISCOVER_LIST_HEADER = 6
+_DISCOVER_LIST_ENTRY = 12
+
+
+def is_valid_station_mac(mac: str | bytes | None, *, host_mac: str | None = None) -> bool:
+    """Return whether *mac* could plausibly be a real powerline station.
+
+    Rejects missing/malformed values, the all-zero and broadcast addresses,
+    any multicast/group address (I/G bit set) and the host's own MAC.
+    """
+
+    if mac is None:
+        return False
+    if isinstance(mac, (bytes, bytearray)):
+        raw = bytes(mac)
+    else:
+        clean = str(mac).strip().lower().replace(":", "").replace("-", "")
+        if len(clean) != 12:
+            return False
+        try:
+            raw = bytes.fromhex(clean)
+        except ValueError:
+            return False
+    if len(raw) != 6:
+        return False
+    if raw == b"\x00" * 6 or raw == b"\xff" * 6:
+        return False
+    if raw[0] & 0x01:
+        return False
+    if host_mac and _mac_bytes_to_str(raw) == str(host_mac).strip().lower().replace("-", ":"):
+        return False
+    return True
+
+
+def parse_network_stats_payload(payload: bytes) -> List[Dict[str, int]]:
+    """Parse one GET_NETWORK_STATS confirmation payload.
+
+    Raises ``ValueError`` when the payload is not a well-formed confirmation.
+    Only the number of stations declared in the header is read: the rest of
+    the frame is Ethernet padding, which some adapters fill with stale buffer
+    contents (fragments of earlier frames) rather than zeros.
+    """
+
+    if len(payload) < _NETWORK_STATS_HEADER:
+        raise ValueError("network stats payload too short")
+    if payload[0] != 0x02 or int.from_bytes(payload[1:3], "little") != NETWORK_STATS_CNF_MMTYPE:
+        raise ValueError("not a GET_NETWORK_STATS confirmation")
+    if payload[5:8] != BROADCOM_OUI:
+        raise ValueError("unexpected vendor OUI in network stats confirmation")
+
+    count = payload[9]
+    needed = _NETWORK_STATS_HEADER + count * _NETWORK_STATS_ENTRY
+    if needed > len(payload):
+        raise ValueError(
+            f"network stats confirmation truncated: {count} station(s) declared, "
+            f"{len(payload)} byte payload"
+        )
+
+    stations: List[Dict[str, int]] = []
+    for idx in range(count):
+        offset = _NETWORK_STATS_HEADER + idx * _NETWORK_STATS_ENTRY
+        mac_bytes = payload[offset : offset + 6]
+        if not is_valid_station_mac(mac_bytes):
+            continue
+        stations.append(
+            {
+                "mac": _mac_bytes_to_str(mac_bytes),
+                "to_rate": payload[offset + 6] | ((payload[offset + 7] & 0x07) << 8),
+                "from_rate": payload[offset + 8] | ((payload[offset + 9] & 0x07) << 8),
+            }
+        )
+    return stations
+
+
 def parse_network_stats(pkts: list[Any] | Any) -> List[Dict[str, int]]:
+    """Parse GET_NETWORK_STATS confirmation packet(s).
+
+    Packets that are not valid confirmations are skipped.
+    """
+
     if not isinstance(pkts, list):
         pkts = [pkts]
 
     combined: Dict[str, Dict[str, int]] = {}
 
     for pkt in pkts:
-        payload = bytes(pkt[Raw].load)
-        offset = 10
-        while offset + 10 <= len(payload):
-            mac = _mac_bytes_to_str(payload[offset : offset + 6])
-            to_rate = payload[offset + 6] | ((payload[offset + 7] & 0x07) << 8)
-            from_rate = payload[offset + 8] | ((payload[offset + 9] & 0x07) << 8)
-            combined[mac] = {"mac": mac, "to_rate": to_rate, "from_rate": from_rate}
-            offset += 10
+        try:
+            if pkt is None or Raw not in pkt:
+                continue
+            if Ether in pkt and pkt[Ether].type != 0x8912:
+                continue
+            stations = parse_network_stats_payload(bytes(pkt[Raw].load))
+        except ValueError:
+            continue
+        for station in stations:
+            combined[station["mac"]] = station
 
     return list(combined.values())
 
 
 def parse_discover_list(pkt: Any) -> Dict[str, Any]:
     payload = bytes(pkt[Raw].load)
+    if len(payload) < _DISCOVER_LIST_HEADER:
+        raise ValueError("discover list payload too short")
+    if int.from_bytes(payload[1:3], "little") != DISCOVER_LIST_CNF_MMTYPE:
+        raise ValueError("not a CM_DISCOVER_LIST confirmation")
     station_count = payload[5]
-    octets_per_station = 12
-    offset = 6
+    if _DISCOVER_LIST_HEADER + station_count * _DISCOVER_LIST_ENTRY > len(payload):
+        raise ValueError("discover list confirmation truncated")
     stations = []
-    for _ in range(station_count):
-        base = offset
+    for idx in range(station_count):
+        base = _DISCOVER_LIST_HEADER + idx * _DISCOVER_LIST_ENTRY
+        mac_bytes = payload[base : base + 6]
+        if not is_valid_station_mac(mac_bytes):
+            continue
         role_byte = payload[base + 9]
         stations.append({
-            "mac": _mac_bytes_to_str(payload[base : base + 6]),
+            "mac": _mac_bytes_to_str(mac_bytes),
             "tei": payload[base + 6],
             "same_network": payload[base + 7] != 0,
             "snid": payload[base + 8] & 0x0F,
@@ -194,7 +303,6 @@ def parse_discover_list(pkt: Any) -> Dict[str, Any]:
             "bcco": (role_byte & 0x80) != 0,
             "signal_level": payload[base + 10],
         })
-        offset += octets_per_station
     return {"stations": stations}
 
 

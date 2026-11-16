@@ -1,7 +1,7 @@
 {
   "domain": "homeplug_av",
   "name": "HomePlug AV",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "documentation": "https://github.com/xuio/homeassistant-homeplug-av",
   "issue_tracker": "https://github.com/xuio/homeassistant-homeplug-av/issues",
   "iot_class": "local_polling",
