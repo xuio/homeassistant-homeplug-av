@@ -19,6 +19,30 @@ def normalize_mac(mac: str | None) -> str:
     return (mac or "").lower()
 
 
+def is_valid_adapter_mac(mac: str | None, host_mac: str | None = None) -> bool:
+    """Return whether *mac* could be a real powerline station address.
+
+    Rejects malformed values, all-zero, broadcast and multicast (I/G bit set)
+    addresses, and the Home Assistant host's own interface MAC.
+    """
+
+    clean = normalize_mac(mac).strip().replace("-", ":")
+    parts = clean.split(":")
+    if len(parts) != 6 or any(len(part) != 2 for part in parts):
+        return False
+    try:
+        octets = bytes(int(part, 16) for part in parts)
+    except ValueError:
+        return False
+    if octets in (b"\x00" * 6, b"\xff" * 6):
+        return False
+    if octets[0] & 0x01:
+        return False
+    if host_mac and clean == normalize_mac(host_mac).strip().replace("-", ":"):
+        return False
+    return True
+
+
 def adapter_metadata(hass: Any, mac: str) -> dict[str, Any]:
     """Return retained adapter metadata for a MAC address."""
 

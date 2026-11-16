@@ -15,6 +15,12 @@ from .network import send_message, BROADCAST_MAC, send_message_collect, DEFAULT_
 
 _LOG = logging.getLogger(__name__)
 
+# Leading payload bytes (MMV + little-endian MMTYPE) of the confirmations we
+# expect.  Replies that do not start with these are ignored by the sniffer.
+DISCOVER_CNF_PREFIX = b"\x02\x71\xA0"
+NETWORK_STATS_CNF_PREFIX = b"\x02\x2D\xA0"
+DISCOVER_LIST_CNF_PREFIX = b"\x01\x15\x00"
+
 
 # ---------------------------------------------------------------------------
 # Internal helper with timeout support
@@ -95,7 +101,14 @@ def discover(interface: Optional[str] = None, pla_mac: Optional[str] = None, *, 
 
     payload = PAYLOADS["discover"]
     packets = list(
-        send_message_collect(payload, interface=interface, dest_mac=BROADCAST_MAC, timeout=timeout, window=timeout)
+        send_message_collect(
+            payload,
+            interface=interface,
+            dest_mac=BROADCAST_MAC,
+            timeout=timeout,
+            window=timeout,
+            response_match=_payload_prefix_match(DISCOVER_CNF_PREFIX),
+        )
     )
     return packets
 
@@ -141,7 +154,13 @@ def get_capabilities(interface: Optional[str] = None, pla_mac: Optional[str] = N
 def get_network_stats(interface: Optional[str] = None, pla_mac: Optional[str] = None, *, timeout: float = DEFAULT_TIMEOUT):
     dest = pla_mac or BROADCAST_MAC
     payload = PAYLOADS["get_network_stats"]
-    p = send_message(payload, interface=interface, dest_mac=dest, timeout=timeout)
+    p = send_message(
+        payload,
+        interface=interface,
+        dest_mac=dest,
+        timeout=timeout,
+        response_match=_payload_prefix_match(NETWORK_STATS_CNF_PREFIX),
+    )
     if p is None:
         _LOG.debug("No reply packet – returning empty list")
         return []
@@ -166,11 +185,14 @@ def restart(interface: Optional[str] = None, pla_mac: Optional[str] = None, *, t
 
 def get_discover_list(interface: Optional[str] = None, pla_mac: Optional[str] = None, *, timeout: float = DEFAULT_TIMEOUT):
     """Request the discover list from adapter(s)."""
-    return _run(
-        "get_discover_list",
+    return _run_payload(
+        PAYLOADS["get_discover_list"],
         interface,
         pla_mac,
         timeout,
+        ether_type=0x88E1,
+        response_prefix=DISCOVER_LIST_CNF_PREFIX,
+        command_name="get_discover_list",
         warn_on_no_reply=False,
     )
 

@@ -48,12 +48,21 @@ from .const import (
 )
 from .coordinator import PowerlineDataUpdateCoordinator
 from .diagnostics import build_diagnostics_payload
-from .helpers import adapter_macs, ensure_index_map, normalize_mac, snapshot_signal
+from .helpers import (
+    adapter_macs,
+    ensure_index_map,
+    is_valid_adapter_mac,
+    normalize_mac,
+    snapshot_signal,
+)
 from pla_util_py import PLAUtil
 
 _LOGGER = logging.getLogger(__name__)
 
 DISCOVERY_MISSES_TO_MARK_OFFLINE = 3
+
+# Config entry option recording that the one-time phantom device sweep ran.
+OPTION_PHANTOM_CLEANUP_DONE = "phantom_device_cleanup_v1"
 
 SERVICE_ENTRY_SCHEMA = vol.Schema({vol.Optional(ATTR_ENTRY_ID): cv.string})
 
@@ -79,6 +88,106 @@ def _registry_index_map(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, in
             if identifier_domain == DOMAIN:
                 index_map[normalize_mac(identifier)] = int(match.group(1))
     return index_map
+
+
+def _interface_mac(interface: str) -> str | None:
+    """Return the MAC of the sniffing interface, or None if unknown."""
+
+    try:
+        from scapy.all import get_if_hwaddr  # type: ignore
+
+        mac = normalize_mac(get_if_hwaddr(interface))
+    except Exception as err:  # pragma: no cover - depends on host
+        _LOGGER.debug("Could not read MAC of interface %s: %s", interface, err)
+        return None
+    return mac or None
+
+
+def _phantom_device_macs(
+    devices: list[tuple[str, bool]],
+    discovered: set[str],
+    host_mac: str | None,
+    *,
+    full_sweep: bool,
+) -> set[str]:
+    """Return registry device MACs that should be removed as phantoms.
+
+    *devices* holds ``(mac, user_customized)`` tuples.  Devices with a MAC
+    that can never be a real station are always removed.  During the one-time
+    *full_sweep* (only run when discovery found at least one adapter), devices
+    that did not answer discovery and that the user never renamed or put in
+    an area are removed too; a real adapter that was merely offline is simply
+    recreated the next time it is seen.
+    """
+
+    remove: set[str] = set()
+    for mac, customized in devices:
+        mac = normalize_mac(mac)
+        if not is_valid_adapter_mac(mac, host_mac):
+            remove.add(mac)
+        elif full_sweep and discovered and mac not in discovered and not customized:
+            remove.add(mac)
+    return remove
+
+
+def _async_cleanup_phantom_devices(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    entry_data: dict,
+    coordinator: PowerlineDataUpdateCoordinator,
+    discovered: set[str],
+) -> None:
+    """Remove phantom adapters left behind by earlier builds."""
+
+    registry = dr.async_get(hass)
+    devices_by_mac: dict[str, Any] = {}
+    for device in dr.async_entries_for_config_entry(registry, entry.entry_id):
+        for identifier_domain, identifier in device.identifiers:
+            if identifier_domain == DOMAIN:
+                devices_by_mac[normalize_mac(identifier)] = device
+
+    full_sweep = bool(discovered) and not entry.options.get(OPTION_PHANTOM_CLEANUP_DONE)
+    remove = _phantom_device_macs(
+        [
+            (mac, bool(device.name_by_user or device.area_id))
+            for mac, device in devices_by_mac.items()
+        ],
+        discovered,
+        entry_data.get("host_mac"),
+        full_sweep=full_sweep,
+    )
+    # Retained metadata and the persisted index map may also hold bad MACs.
+    host_mac = entry_data.get("host_mac")
+    for mac in set(entry_data.get("index_map", {})) | set(entry_data.get("adapter_metadata", {})):
+        if not is_valid_adapter_mac(mac, host_mac) or (
+            full_sweep and mac not in discovered and mac not in devices_by_mac
+        ):
+            remove.add(mac)
+
+    for mac in remove:
+        if device := devices_by_mac.get(mac):
+            registry.async_remove_device(device.id)
+        coordinator._remove_registry_entities_for_mac(mac)
+        entry_data.get("adapter_metadata", {}).pop(mac, None)
+        entry_data.get("index_map", {}).pop(mac, None)
+        entry_data.get("online_macs", set()).discard(mac)
+
+    options = dict(entry.options)
+    changed = False
+    if remove and "index_map" in options:
+        options["index_map"] = dict(entry_data.get("index_map", {}))
+        changed = True
+    if full_sweep:
+        options[OPTION_PHANTOM_CLEANUP_DONE] = True
+        changed = True
+    if changed:
+        hass.config_entries.async_update_entry(entry, options=options)
+    if remove:
+        _LOGGER.warning(
+            "Removed %d phantom powerline adapter(s) created from malformed replies",
+            len(remove),
+        )
+    _sync_adapter_list(entry_data)
 
 
 def _qca_discover_list(network_info: dict, source_mac: str) -> dict:
@@ -113,7 +222,7 @@ def _qca_discover_list(network_info: dict, source_mac: str) -> dict:
 
         for station in network.get("stations", []):
             station_mac = normalize_mac(station.get("mac"))
-            if not station_mac:
+            if not is_valid_adapter_mac(station_mac):
                 continue
             stations.append(
                 {
@@ -151,9 +260,10 @@ def _seed_adapters_from_index_map(entry_data: dict, seen_at: float) -> None:
     """Seed retained adapter metadata from persisted stable MAC indexes."""
 
     metadata = entry_data["adapter_metadata"]
+    host_mac = entry_data.get("host_mac")
     for mac in sorted(entry_data.get("index_map", {})):
         mac = normalize_mac(mac)
-        if not mac:
+        if not is_valid_adapter_mac(mac, host_mac):
             continue
         metadata.setdefault(
             mac,
@@ -172,9 +282,12 @@ def _merge_discovered_adapters(entry_data: dict, adapters: list[dict], seen_at: 
 
     online: set[str] = set()
     metadata = entry_data["adapter_metadata"]
+    host_mac = entry_data.get("host_mac")
     for adapter in adapters:
         mac = normalize_mac(adapter.get("mac"))
-        if not mac:
+        if not is_valid_adapter_mac(mac, host_mac):
+            if mac:
+                _LOGGER.debug("Ignoring discovered adapter with invalid MAC %s", mac)
             continue
         previous = metadata.get(mac, {})
         metadata[mac] = {**previous, **adapter, "mac": mac, "last_seen": seen_at}
@@ -471,6 +584,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "interface": interface,
         "pla": pla,
         "unloading": False,
+        "host_mac": await hass.async_add_executor_job(_interface_mac, interface),
     }
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = entry_data
     _seed_adapters_from_index_map(entry_data, time.time())
@@ -482,9 +596,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.warning("Initial powerline discovery failed: %s", err)
             adapters = []
 
-    online_macs.update(_merge_discovered_adapters(entry_data, adapters, time.time()))
-    ensure_index_map(hass, entry, entry_data, adapter_macs(entry_data))
-    _LOGGER.debug("Discovered %d powerline adapter(s)", len(adapters))
+    discovered_macs = _merge_discovered_adapters(entry_data, adapters, time.time())
+    online_macs.update(discovered_macs)
+    _LOGGER.debug("Discovered %d powerline adapter(s)", len(discovered_macs))
 
     coordinator = PowerlineDataUpdateCoordinator(
         hass,
@@ -499,6 +613,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         qca_diagnostic_interval_seconds=qca_diagnostic_interval_seconds,
     )
     entry_data["coordinator"] = coordinator
+
+    _async_cleanup_phantom_devices(hass, entry, entry_data, coordinator, discovered_macs)
+    ensure_index_map(hass, entry, entry_data, adapter_macs(entry_data))
 
     async def _refresh_discovery() -> None:
         """Refresh adapter presence and discover-list snapshots."""

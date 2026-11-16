@@ -18,8 +18,19 @@ from homeassistant.helpers.update_coordinator import (
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
-from .const import DEFAULT_QCA_DIAGNOSTIC_INTERVAL_SECONDS, DOMAIN
-from .helpers import adapter_macs, ensure_index_map, normalize_mac, snapshot_signal
+from .const import (
+    DEFAULT_QCA_DIAGNOSTIC_INTERVAL_SECONDS,
+    DOMAIN,
+    MAX_NEW_ADAPTERS_PER_POLL,
+    PEER_CONFIRMATION_POLLS,
+)
+from .helpers import (
+    adapter_macs,
+    ensure_index_map,
+    is_valid_adapter_mac,
+    normalize_mac,
+    snapshot_signal,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,6 +69,8 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         self._qca_diagnostic_interval_seconds = qca_diagnostic_interval_seconds
         self._last_qca_diagnostic_refresh = 0.0
         self._last_poll_attempts = 0
+        self._pending_peers: dict[str, int] = {}
+        self._poll_failures = 0
 
         super().__init__(
             hass,
@@ -70,6 +83,56 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         """Return this config entry's runtime data."""
 
         return self.hass.data.get(DOMAIN, {}).get(self._entry_id, {})
+
+    def _host_mac(self) -> str | None:
+        """Return the MAC of the interface Home Assistant sniffs on, if known."""
+
+        data = getattr(self.hass, "data", None)
+        if not isinstance(data, dict):
+            return None
+        return data.get(DOMAIN, {}).get(self._entry_id, {}).get("host_mac")
+
+    def _admit_peers(
+        self,
+        candidates: list[str],
+        adapter_metadata: Dict[str, Dict[str, Any]],
+    ) -> set[str]:
+        """Return which not-yet-known peer MACs may become adapters this poll.
+
+        A peer that only appears in another adapter's station list is admitted
+        once it has been reported in ``PEER_CONFIRMATION_POLLS`` consecutive
+        polls, and at most ``MAX_NEW_ADAPTERS_PER_POLL`` are admitted per poll.
+        Peers that drop out of a poll start counting again from zero.
+        """
+
+        pending = getattr(self, "_pending_peers", None)
+        if pending is None:
+            pending = self._pending_peers = {}
+
+        unknown = sorted({mac for mac in candidates if mac not in adapter_metadata})
+        for mac in list(pending):
+            if mac not in unknown:
+                pending.pop(mac, None)
+
+        ready: list[str] = []
+        for mac in unknown:
+            pending[mac] = pending.get(mac, 0) + 1
+            if pending[mac] >= PEER_CONFIRMATION_POLLS:
+                ready.append(mac)
+
+        if len(ready) > MAX_NEW_ADAPTERS_PER_POLL:
+            _LOGGER.warning(
+                "Ignoring %d new powerline stations reported in one poll "
+                "(limit %d); this usually means a malformed reply: %s",
+                len(ready),
+                MAX_NEW_ADAPTERS_PER_POLL,
+                ", ".join(ready[:5]) + ("..." if len(ready) > 5 else ""),
+            )
+            return set()
+
+        for mac in ready:
+            pending.pop(mac, None)
+        return set(ready)
 
     def _stats_call(self, mac: str | None = None):
         """Return network stats with 2-second timeout when supported."""
@@ -233,6 +296,14 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         source_mac = normalize_mac(source_mac)
         peer_mac = normalize_mac(peer_mac)
         if not source_mac or not peer_mac or source_mac == peer_mac:
+            return False
+        host_mac = self._host_mac()
+        if not is_valid_adapter_mac(source_mac, host_mac) or not is_valid_adapter_mac(
+            peer_mac, host_mac
+        ):
+            _LOGGER.debug(
+                "Ignoring link stat with invalid MAC %s -> %s", source_mac, peer_mac
+            )
             return False
 
         coerced_rates = self._coerce_link_rates(
@@ -406,6 +477,30 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
         if expired:
             self._sync_adapter_list(entry_data)
 
+    def _log_poll_errors(self, errors: list[BaseException], attempts: int) -> None:
+        """Log poll failures once at WARNING, then at DEBUG until recovery."""
+
+        failures = getattr(self, "_poll_failures", 0)
+        if not errors:
+            if failures:
+                _LOGGER.info("Powerline adapter polling recovered after %d failed poll(s)", failures)
+            self._poll_failures = 0
+            return
+
+        self._poll_failures = failures + 1
+        message = "; ".join(sorted({f"{type(err).__name__}: {err}" for err in errors}))
+        if failures == 0:
+            _LOGGER.warning(
+                "Failed to poll %d of %d powerline adapter(s) on %s: %s "
+                "(further failures are logged at debug level until polling recovers)",
+                len(errors),
+                attempts,
+                getattr(self, "_interface", "?"),
+                message,
+            )
+        else:
+            _LOGGER.debug("Powerline adapter poll failed again: %s", message)
+
     async def _async_update_data(self) -> Dict[str, Any]:
         """Fetch data from the powerline network."""
         try:
@@ -460,12 +555,28 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
             successful_sources: set[str] = set()
             qca_diagnostic_links: list[tuple[str, str]] = []
 
+            host_mac = self._host_mac()
+            poll_errors = [r for r in results if isinstance(r, BaseException)]
+            self._log_poll_errors(poll_errors, len(results))
+
+            # Decide up front which never-seen peers may become adapters.
+            peer_candidates: list[str] = []
+            for result in results:
+                if isinstance(result, BaseException) or not result[1]:
+                    continue
+                for stat in result[1]:
+                    if not isinstance(stat, dict):
+                        continue
+                    peer_mac = normalize_mac(stat.get("mac"))
+                    if is_valid_adapter_mac(peer_mac, host_mac):
+                        peer_candidates.append(peer_mac)
+            admitted_peers = self._admit_peers(peer_candidates, adapter_metadata)
+
             # Process results from each adapter
             for result in results:
-                if isinstance(result, Exception):
-                    _LOGGER.warning(f"Failed to poll adapter: {result}")
+                if isinstance(result, BaseException):
                     continue
-                    
+
                 source_mac, stats_list = result
                 
                 if not stats_list:
@@ -487,7 +598,9 @@ class PowerlineDataUpdateCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
                         continue
                         
                     peer_mac = normalize_mac(stat["mac"])
-                    if not peer_mac:
+                    if not is_valid_adapter_mac(peer_mac, host_mac):
+                        continue
+                    if peer_mac not in adapter_metadata and peer_mac not in admitted_peers:
                         continue
                     tx_rate = stat.get("to_rate")
                     rx_rate = stat.get("from_rate")

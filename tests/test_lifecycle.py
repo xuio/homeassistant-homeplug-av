@@ -159,24 +159,24 @@ def test_discovery_online_update_resets_miss_count_on_success() -> None:
 def test_ensure_index_map_assigns_stable_indexes_once() -> None:
     hass = _FakeHass()
     entry = SimpleNamespace(options={})
-    data = {"index_map": {"bb:bb:bb:bb:bb:bb": 2}}
+    data = {"index_map": {"ba:bb:bb:bb:bb:bb": 2}}
 
     ensure_index_map(
         hass,
         entry,
         data,
-        {"aa:aa:aa:aa:aa:aa", "bb:bb:bb:bb:bb:bb"},
+        {"aa:aa:aa:aa:aa:aa", "ba:bb:bb:bb:bb:bb"},
     )
     ensure_index_map(
         hass,
         entry,
         data,
-        {"aa:aa:aa:aa:aa:aa", "bb:bb:bb:bb:bb:bb"},
+        {"aa:aa:aa:aa:aa:aa", "ba:bb:bb:bb:bb:bb"},
     )
 
     assert data["index_map"] == {
         "aa:aa:aa:aa:aa:aa": 3,
-        "bb:bb:bb:bb:bb:bb": 2,
+        "ba:bb:bb:bb:bb:bb": 2,
     }
     assert hass.config_entries.updates == [
         {"options": {"index_map": data["index_map"]}}
@@ -212,14 +212,14 @@ def test_remove_registry_entities_for_expired_adapter(monkeypatch) -> None:
     entries = [
         SimpleNamespace(unique_id="powerline_aa:aa:aa:aa:aa:aa_mac", entity_id="sensor.mac"),
         SimpleNamespace(
-            unique_id="powerline_bb:bb:bb:bb:bb:bb_to_aa:aa:aa:aa:aa:aa_tx",
+            unique_id="powerline_ba:bb:bb:bb:bb:bb_to_aa:aa:aa:aa:aa:aa_tx",
             entity_id="sensor.to_expired",
         ),
         SimpleNamespace(
-            unique_id="powerline_bb:bb:bb:bb:bb:bb_from_aa:aa:aa:aa:aa:aa_rx",
+            unique_id="powerline_ba:bb:bb:bb:bb:bb_from_aa:aa:aa:aa:aa:aa_rx",
             entity_id="sensor.from_expired",
         ),
-        SimpleNamespace(unique_id="powerline_bb:bb:bb:bb:bb:bb_mac", entity_id="sensor.other"),
+        SimpleNamespace(unique_id="powerline_ba:bb:bb:bb:bb:bb_mac", entity_id="sensor.other"),
     ]
     monkeypatch.setattr(coordinator_module.er, "async_get", lambda hass: registry)
     monkeypatch.setattr(
@@ -241,19 +241,19 @@ def test_remove_registry_entities_for_expired_link(monkeypatch) -> None:
     registry = SimpleNamespace(async_remove=removed.append)
     entries = [
         SimpleNamespace(
-            unique_id="powerline_aa:aa:aa:aa:aa:aa_to_bb:bb:bb:bb:bb:bb_tx",
+            unique_id="powerline_aa:aa:aa:aa:aa:aa_to_ba:bb:bb:bb:bb:bb_tx",
             entity_id="sensor.tx",
         ),
         SimpleNamespace(
-            unique_id="powerline_aa:aa:aa:aa:aa:aa_from_bb:bb:bb:bb:bb:bb_rx",
+            unique_id="powerline_aa:aa:aa:aa:aa:aa_from_ba:bb:bb:bb:bb:bb_rx",
             entity_id="sensor.rx",
         ),
         SimpleNamespace(
-            unique_id="powerline_aa:aa:aa:aa:aa:aa_to_bb:bb:bb:bb:bb:bb_bda",
+            unique_id="powerline_aa:aa:aa:aa:aa:aa_to_ba:bb:bb:bb:bb:bb_bda",
             entity_id="sensor.diagnostic",
         ),
         SimpleNamespace(
-            unique_id="powerline_bb:bb:bb:bb:bb:bb_to_aa:aa:aa:aa:aa:aa_tx",
+            unique_id="powerline_ba:bb:bb:bb:bb:bb_to_aa:aa:aa:aa:aa:aa_tx",
             entity_id="sensor.reverse",
         ),
     ]
@@ -267,7 +267,7 @@ def test_remove_registry_entities_for_expired_link(monkeypatch) -> None:
     coordinator = _coordinator()
     coordinator._remove_registry_entities_for_link(
         "aa:aa:aa:aa:aa:aa",
-        "bb:bb:bb:bb:bb:bb",
+        "ba:bb:bb:bb:bb:bb",
     )
 
     assert removed == ["sensor.tx", "sensor.rx", "sensor.diagnostic"]
@@ -325,17 +325,17 @@ def test_qca_poll_order_prefers_last_successful_source() -> None:
     coordinator = _coordinator()
     adapter_metadata = {
         "aa:aa:aa:aa:aa:aa": {"backend": "qca"},
-        "bb:bb:bb:bb:bb:bb": {"backend": "qca"},
+        "ba:bb:bb:bb:bb:bb": {"backend": "qca"},
     }
 
     order, single_source = coordinator._poll_order(
-        ["aa:aa:aa:aa:aa:aa", "bb:bb:bb:bb:bb:bb"],
+        ["aa:aa:aa:aa:aa:aa", "ba:bb:bb:bb:bb:bb"],
         adapter_metadata,
-        {"preferred_stats_source": "bb:bb:bb:bb:bb:bb"},
+        {"preferred_stats_source": "ba:bb:bb:bb:bb:bb"},
     )
 
     assert single_source is True
-    assert order == ["bb:bb:bb:bb:bb:bb", "aa:aa:aa:aa:aa:aa"]
+    assert order == ["ba:bb:bb:bb:bb:bb", "aa:aa:aa:aa:aa:aa"]
 
 
 def test_record_link_stat_derives_reciprocal_qca_rates() -> None:
@@ -344,7 +344,7 @@ def test_record_link_stat_derives_reciprocal_qca_rates() -> None:
     fresh_keys: set[str] = set()
     metadata = {
         "aa:aa:aa:aa:aa:aa": {"mac": "aa:aa:aa:aa:aa:aa", "backend": "qca"},
-        "bb:bb:bb:bb:bb:bb": {"mac": "bb:bb:bb:bb:bb:bb", "backend": "qca"},
+        "ba:bb:bb:bb:bb:bb": {"mac": "ba:bb:bb:bb:bb:bb", "backend": "qca"},
     }
 
     assert coordinator._record_link_stat(
@@ -353,7 +353,7 @@ def test_record_link_stat_derives_reciprocal_qca_rates() -> None:
         adapter_metadata=metadata,
         now=123.0,
         source_mac="aa:aa:aa:aa:aa:aa",
-        peer_mac="bb:bb:bb:bb:bb:bb",
+        peer_mac="ba:bb:bb:bb:bb:bb",
         tx_rate=140,
         rx_rate=137,
         stat={"bda": "11:22:33:44:55:66"},
@@ -363,7 +363,7 @@ def test_record_link_stat_derives_reciprocal_qca_rates() -> None:
         fresh_keys=fresh_keys,
         adapter_metadata=metadata,
         now=123.0,
-        source_mac="bb:bb:bb:bb:bb:bb",
+        source_mac="ba:bb:bb:bb:bb:bb",
         peer_mac="aa:aa:aa:aa:aa:aa",
         tx_rate=137,
         rx_rate=140,
@@ -371,11 +371,11 @@ def test_record_link_stat_derives_reciprocal_qca_rates() -> None:
         derived=True,
     )
 
-    assert mesh_data["aa:aa:aa:aa:aa:aa_bb:bb:bb:bb:bb:bb"]["tx_rate"] == 140
-    assert mesh_data["aa:aa:aa:aa:aa:aa_bb:bb:bb:bb:bb:bb"]["rx_rate"] == 137
-    assert mesh_data["bb:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]["tx_rate"] == 137
-    assert mesh_data["bb:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]["rx_rate"] == 140
-    assert mesh_data["bb:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]["derived"] is True
+    assert mesh_data["aa:aa:aa:aa:aa:aa_ba:bb:bb:bb:bb:bb"]["tx_rate"] == 140
+    assert mesh_data["aa:aa:aa:aa:aa:aa_ba:bb:bb:bb:bb:bb"]["rx_rate"] == 137
+    assert mesh_data["ba:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]["tx_rate"] == 137
+    assert mesh_data["ba:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]["rx_rate"] == 140
+    assert mesh_data["ba:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]["derived"] is True
 
 
 def test_flatten_qca_link_stats_selects_entity_safe_fields() -> None:
@@ -432,14 +432,14 @@ def test_refresh_qca_link_diagnostics_updates_direct_links_only() -> None:
         "rx": {"rx_pbs_passed": 200, "rx_pbs_failed": 1, "rx_intervals": []},
     }
     mesh_data = {
-        "aa:aa:aa:aa:aa:aa_bb:bb:bb:bb:bb:bb": {
+        "aa:aa:aa:aa:aa:aa_ba:bb:bb:bb:bb:bb": {
             "source": "aa:aa:aa:aa:aa:aa",
-            "target": "bb:bb:bb:bb:bb:bb",
+            "target": "ba:bb:bb:bb:bb:bb",
             "available": True,
             "derived": False,
         },
-        "bb:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa": {
-            "source": "bb:bb:bb:bb:bb:bb",
+        "ba:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa": {
+            "source": "ba:bb:bb:bb:bb:bb",
             "target": "aa:aa:aa:aa:aa:aa",
             "available": True,
             "derived": True,
@@ -450,15 +450,15 @@ def test_refresh_qca_link_diagnostics_updates_direct_links_only() -> None:
         coordinator._async_refresh_qca_link_diagnostics(
             mesh_data,
             [
-                ("aa:aa:aa:aa:aa:aa", "bb:bb:bb:bb:bb:bb"),
-                ("bb:bb:bb:bb:bb:bb", "aa:aa:aa:aa:aa:aa"),
+                ("aa:aa:aa:aa:aa:aa", "ba:bb:bb:bb:bb:bb"),
+                ("ba:bb:bb:bb:bb:bb", "aa:aa:aa:aa:aa:aa"),
             ],
             10.0,
         )
     )
 
-    direct = mesh_data["aa:aa:aa:aa:aa:aa_bb:bb:bb:bb:bb:bb"]
-    derived = mesh_data["bb:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]
+    direct = mesh_data["aa:aa:aa:aa:aa:aa_ba:bb:bb:bb:bb:bb"]
+    derived = mesh_data["ba:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]
     assert direct["qca_tx_pbs_passed"] == 100
     assert direct["qca_rx_pbs_failed"] == 1
     assert "qca_tx_pbs_passed" not in derived
@@ -468,10 +468,10 @@ def test_qca_update_uses_fallback_source_and_derives_reverse_link() -> None:
     entry_data = {
         "adapter_metadata": {
             "aa:aa:aa:aa:aa:aa": {"mac": "aa:aa:aa:aa:aa:aa", "backend": "qca"},
-            "bb:bb:bb:bb:bb:bb": {"mac": "bb:bb:bb:bb:bb:bb", "backend": "qca"},
+            "ba:bb:bb:bb:bb:bb": {"mac": "ba:bb:bb:bb:bb:bb", "backend": "qca"},
         },
         "adapters": [],
-        "online_macs": {"aa:aa:aa:aa:aa:aa", "bb:bb:bb:bb:bb:bb"},
+        "online_macs": {"aa:aa:aa:aa:aa:aa", "ba:bb:bb:bb:bb:bb"},
         "discovery_miss_counts": {},
         "index_map": {},
         "entry": SimpleNamespace(options={}),
@@ -497,25 +497,25 @@ def test_qca_update_uses_fallback_source_and_derives_reverse_link() -> None:
 
     result = asyncio.run(coordinator._async_update_data())
 
-    assert entry_data["preferred_stats_source"] == "bb:bb:bb:bb:bb:bb"
+    assert entry_data["preferred_stats_source"] == "ba:bb:bb:bb:bb:bb"
     assert coordinator._last_poll_attempts == 2
     assert result["aa:aa:aa:aa:aa:aa"]["mac"] == "aa:aa:aa:aa:aa:aa"
-    assert coordinator.mesh_data["bb:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]["tx_rate"] == 137
-    assert coordinator.mesh_data["aa:aa:aa:aa:aa:aa_bb:bb:bb:bb:bb:bb"]["tx_rate"] == 140
-    assert coordinator.mesh_data["aa:aa:aa:aa:aa:aa_bb:bb:bb:bb:bb:bb"]["derived"] is True
+    assert coordinator.mesh_data["ba:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]["tx_rate"] == 137
+    assert coordinator.mesh_data["aa:aa:aa:aa:aa:aa_ba:bb:bb:bb:bb:bb"]["tx_rate"] == 140
+    assert coordinator.mesh_data["aa:aa:aa:aa:aa:aa_ba:bb:bb:bb:bb:bb"]["derived"] is True
 
 
 def test_mixed_backend_update_still_derives_qca_reverse_link() -> None:
     entry_data = {
         "adapter_metadata": {
             "aa:aa:aa:aa:aa:aa": {"mac": "aa:aa:aa:aa:aa:aa", "backend": "qca"},
-            "bb:bb:bb:bb:bb:bb": {"mac": "bb:bb:bb:bb:bb:bb", "backend": "qca"},
+            "ba:bb:bb:bb:bb:bb": {"mac": "ba:bb:bb:bb:bb:bb", "backend": "qca"},
             "cc:cc:cc:cc:cc:cc": {"mac": "cc:cc:cc:cc:cc:cc", "backend": "homeplug"},
         },
         "adapters": [],
         "online_macs": {
             "aa:aa:aa:aa:aa:aa",
-            "bb:bb:bb:bb:bb:bb",
+            "ba:bb:bb:bb:bb:bb",
             "cc:cc:cc:cc:cc:cc",
         },
         "discovery_miss_counts": {},
@@ -530,7 +530,7 @@ def test_mixed_backend_update_still_derives_qca_reverse_link() -> None:
         if mac == "aa:aa:aa:aa:aa:aa":
             return [
                 {
-                    "mac": "bb:bb:bb:bb:bb:bb",
+                    "mac": "ba:bb:bb:bb:bb:bb",
                     "to_rate": 140,
                     "from_rate": 137,
                 }
@@ -543,6 +543,6 @@ def test_mixed_backend_update_still_derives_qca_reverse_link() -> None:
 
     assert coordinator._last_poll_attempts == 3
     assert result["cc:cc:cc:cc:cc:cc"]["backend"] == "homeplug"
-    assert coordinator.mesh_data["aa:aa:aa:aa:aa:aa_bb:bb:bb:bb:bb:bb"]["tx_rate"] == 140
-    assert coordinator.mesh_data["bb:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]["tx_rate"] == 137
-    assert coordinator.mesh_data["bb:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]["derived"] is True
+    assert coordinator.mesh_data["aa:aa:aa:aa:aa:aa_ba:bb:bb:bb:bb:bb"]["tx_rate"] == 140
+    assert coordinator.mesh_data["ba:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]["tx_rate"] == 137
+    assert coordinator.mesh_data["ba:bb:bb:bb:bb:bb_aa:aa:aa:aa:aa:aa"]["derived"] is True

@@ -17,11 +17,12 @@ file descriptor.  Scapy does all the heavy lifting for us.
 
 from typing import Callable, Optional, Any
 import logging
+import threading
 import time
 import platform
 import os
 
-from scapy.all import Ether, Raw, sendp, sniff, conf, get_if_hwaddr  # type: ignore
+from scapy.all import Ether, Raw, sendp, conf, get_if_hwaddr  # type: ignore
 from scapy.sendrecv import AsyncSniffer  # type: ignore
 
 from .messages import ether_type_for_payload
@@ -61,6 +62,112 @@ def _resolve_interface(preferred: Optional[str] = None) -> str:
     raise NetworkError("Could not find a suitable network interface – use --interface")
 
 
+def _reply_matcher(
+    ether_type: int,
+    src_mac: str,
+    dest_mac: str,
+    response_match: Callable[[Any], bool] | None,
+) -> Callable[[Any], bool]:
+    """Return an lfilter accepting only replies to the frame we are sending.
+
+    The reply must carry the expected EtherType, be addressed to our own
+    interface and (for unicast requests) come from the adapter we queried.
+    Anything else seen on the wire - ordinary IP traffic in particular - is
+    dropped before it reaches a parser.
+    """
+
+    src_mac = src_mac.lower()
+    dest_mac = dest_mac.lower()
+
+    def _match(pkt: Any) -> bool:
+        try:
+            if Ether not in pkt:
+                return False
+            eth = pkt[Ether]
+            if eth.type != ether_type:
+                return False
+            if (eth.dst or "").lower() != src_mac:
+                return False
+            if dest_mac != BROADCAST_MAC and (eth.src or "").lower() != dest_mac:
+                return False
+            if response_match is not None and not response_match(pkt):
+                return False
+            return True
+        except Exception:  # pragma: no cover - malformed frame
+            return False
+
+    return _match
+
+
+def _stop_sniffer(sniffer: Any) -> None:
+    """Stop an AsyncSniffer whether or not it has already finished."""
+
+    try:
+        if getattr(sniffer, "running", False):
+            sniffer.stop()
+        else:
+            sniffer.join(1.0)
+    except Exception as err:  # pragma: no cover - depends on Scapy internals
+        _LOG.debug("Ignoring error while stopping sniffer: %s", err)
+
+
+def _send_and_capture(
+    frame: Any,
+    iface: str,
+    lfilter: Callable[[Any], bool],
+    *,
+    timeout: float,
+    window: float = 0.0,
+    first_only: bool = True,
+) -> list[Any]:
+    """Send *frame* and return matching replies.
+
+    Waits up to *timeout* seconds for the first reply.  With
+    ``first_only=False`` capture continues for *window* more seconds to gather
+    replies from other adapters.
+
+    ``AsyncSniffer`` is never given a ``timeout`` keyword: Scapy 2.7+ rejects
+    it (``'timeout' isn't supported with AsyncSniffer``), and older versions
+    do not need it because we bound the wait ourselves and call ``stop()``.
+    """
+
+    captured: list[Any] = []
+    first_reply = threading.Event()
+    started = threading.Event()
+
+    def _store(pkt: Any) -> None:
+        captured.append(pkt)
+        first_reply.set()
+
+    kwargs: dict[str, Any] = {
+        "iface": iface,
+        "lfilter": lfilter,
+        "prn": _store,
+        "store": False,
+        "started_callback": started.set,
+    }
+    if first_only:
+        kwargs["count"] = 1
+
+    sniffer = AsyncSniffer(**kwargs)
+    sniffer.start()
+    # Arm the sniffer *before* sending so a fast reply is not missed.
+    if not started.wait(1.0):
+        _LOG.debug("Sniffer on %s did not report start within 1 s", iface)
+
+    try:
+        sendp(frame, iface=iface, verbose=False)
+        if first_reply.wait(timeout) and not first_only and window > 0:
+            time.sleep(window)
+    finally:
+        _stop_sniffer(sniffer)
+
+    if sniffer.exception is not None:
+        raise NetworkError(f"Sniffer failed on {iface}: {sniffer.exception}") from sniffer.exception
+
+    return list(captured)
+
+
 def send_message(
     payload: bytes,
     interface: Optional[str] = None,
@@ -83,35 +190,13 @@ def send_message(
 
     _LOG.debug("Sending %d-byte frame on %s (0x%04x → %s)", len(payload), iface, ether_type, dest_mac)
 
-    # The reply can come from *any* PLA, so we only filter on EtherType (and
-    # destination MAC == our MAC).  If the caller specified a unicast dest MAC
-    # we also accept that as the source in the reply.
-    def _match(pkt):  # type: ignore[override]
-        if Ether not in pkt:  # pragma: no cover – defensive
-            return False
-        if pkt.type != ether_type:
-            return False
-        if pkt[Ether].dst.lower() != src_mac.lower():
-            return False
-        # When we addressed a specific adapter, enforce that in the reply.
-        if dest_mac != BROADCAST_MAC and pkt[Ether].src.lower() != dest_mac.lower():
-            return False
-        if response_match is not None and not response_match(pkt):
-            return False
-        return True
-
-    # Arm the sniffer *before* sending to avoid timing races where the reply
-    # arrives faster than we can call sniff().  AsyncSniffer runs in a
-    # separate thread and will stop automatically after *timeout* seconds or
-    # after the *count* is reached (whichever comes first).
-    sniffer = AsyncSniffer(iface=iface, timeout=timeout, lfilter=_match, count=1, store=True)
-    sniffer.start()
-
     t_start = time.time()
-    sendp(frame, iface=iface, verbose=False)
-
-    sniffer.join(timeout + 0.1)  # small guard interval
-    pkts = sniffer.results  # type: ignore[attr-defined]
+    pkts = _send_and_capture(
+        frame,
+        iface,
+        _reply_matcher(ether_type, src_mac, dest_mac, response_match),
+        timeout=timeout,
+    )
     elapsed = time.time() - t_start
 
     if pkts:
@@ -174,55 +259,11 @@ def send_message_collect(
         "[collect] Sending %d-byte frame on %s (0x%04x → %s)", len(payload), iface, ether_type, dest_mac
     )
 
-    # Arm a sniffer to capture *all* matching packets, first until the first
-    # reply (or *timeout*), then for an additional *window* seconds so we can
-    # gather confirmations from other adapters.
-
-    # We cannot express this "wait X seconds *after* first match" logic with
-    # a single AsyncSniffer, so we use a small helper below.
-
-    def _match(pkt):  # type: ignore[override]
-        if Ether not in pkt:
-            return False
-        if pkt.type != ether_type:
-            return False
-        if pkt[Ether].dst.lower() != src_mac.lower():
-            return False
-        if dest_mac != BROADCAST_MAC and pkt[Ether].src.lower() != dest_mac.lower():
-            return False
-        if response_match is not None and not response_match(pkt):
-            return False
-        return True
-
-    # ------------------------------------------------------------------
-    # Capture helper ----------------------------------------------------
-    # ------------------------------------------------------------------
-    captured: list[Any] = []  # we will fill this from the sniffer callback
-
-    def _store(pkt):  # type: ignore[override]
-        captured.append(pkt)
-
-    # Start sniffer *before* we transmit to avoid races.  We do not rely on
-    # the "results" attribute (which is only populated once the sniffer is
-    # stopped) but store packets on-the-fly via the callback above.
-
-    sniffer = AsyncSniffer(iface=iface, lfilter=_match, prn=_store, store=False)
-    sniffer.start()
-
-    sendp(frame, iface=iface, verbose=False)
-
-    # Wait for the first confirmation up to *timeout* seconds.
-    deadline = time.time() + timeout
-    while time.time() < deadline and not captured:
-        time.sleep(0.01)
-
-    if not captured:  # nothing at all
-        sniffer.stop()
-        return []
-
-    # First reply seen – keep listening for *window* seconds more.
-    time.sleep(window)
-
-    sniffer.stop()
-
-    return captured
+    return _send_and_capture(
+        frame,
+        iface,
+        _reply_matcher(ether_type, src_mac, dest_mac, response_match),
+        timeout=timeout,
+        window=window,
+        first_only=False,
+    )

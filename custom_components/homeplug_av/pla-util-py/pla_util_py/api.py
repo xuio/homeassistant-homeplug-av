@@ -9,12 +9,15 @@ Example:
     >>> print(adapters)
 """
 
+import logging
 from typing import Optional, List, Dict, Any
 
 from . import commands
 from . import parsers
 
 __all__ = ["PLAUtil"]
+
+_LOG = logging.getLogger(__name__)
 
 
 def _device_manufacturer(mac: str) -> str:
@@ -138,7 +141,11 @@ class PLAUtil:
         pkt = commands.get_discover_list(self.interface, self.pla_mac, timeout=timeout or commands.DEFAULT_TIMEOUT)
         if pkt is None:
             return {"stations": []}
-        return parsers.parse_discover_list(pkt)
+        try:
+            return parsers.parse_discover_list(pkt)
+        except (ValueError, IndexError) as err:
+            _LOG.debug("Discarding malformed discover-list reply: %s", err)
+            return {"stations": []}
 
     def network_stats(self, *, timeout: float | None = None) -> List[Dict[str, Any]]:
         cmd_timeout = timeout or commands.DEFAULT_TIMEOUT
@@ -157,6 +164,8 @@ class PLAUtil:
                 pass
 
         pkt = commands.get_network_stats(self.interface, self.pla_mac, timeout=cmd_timeout)
+        if not pkt:
+            return []
         return parsers.parse_network_stats(pkt)
 
     def hfid(self, *, timeout: float | None = None) -> str:
